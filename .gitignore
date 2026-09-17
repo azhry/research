@@ -1,0 +1,27 @@
+.playwright-mcp/
+.agents/*
+!.agents/skills/
+!.agents/skills/**
+!.agents/workflows/
+!.agents/workflows/**
+!.agents/templates/
+!.agents/templates/**
+!.agents/knowledge/
+!.agents/knowledge/**
+skills-lock.json
+notes.txt
+node_modules
+.next
+.swc
+# Build artifacts
+*.bak
+frontend/.vite/
+frontend/dist/
+.env
+.env.local
+.env.production
+.vault-config
+.codex
+.kilo
+# OpenWiki keeps resumable run state local until a generation finishes.
+openwiki/.run.json
