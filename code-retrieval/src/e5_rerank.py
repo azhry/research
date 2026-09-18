@@ -27,7 +27,7 @@ from e5_baseline import (
     git_commit,
     load_valid_embedding_cache,
     load_valid_json_cache,
-    rank_with_faiss,
+    rank_with_coir_exact,
     save_embedding_cache,
     save_json_cache,
     set_seed,
@@ -50,6 +50,7 @@ class RerankConfig(BaselineConfig):
     reranker_revision: str = DEFAULT_RERANKER_REVISION
     reranker_max_seq_length: int = 512
     reranker_batch_size: int = 32
+    candidate_depth: int = 1000
     cache_dir: str = "artifacts/e5_rerank/cache"
     artifact_dir: str = "artifacts/e5_rerank"
 
@@ -410,7 +411,7 @@ __all__ = [
     "expected_rerank_cache_metadata",
     "load_valid_embedding_cache",
     "load_valid_json_cache",
-    "rank_with_faiss",
+    "rank_with_coir_exact",
     "rerank_cache_paths",
     "rerank_rankings",
     "rerank_run_identity",

@@ -40,8 +40,8 @@ ignored by Git.
 
 ## E5 + rerank
 
-`notebooks/e5_rerank_experiment.ipynb` reuses the E5 first-stage contract and
-scores only its top-10 candidate pool with
+`notebooks/e5_rerank_experiment.ipynb` reuses the official COIR E5 first-stage
+contract and scores its top-1000 candidate pool with
 `cross-encoder/ms-marco-MiniLM-L6-v2`. It evaluates the original E5 ranking and
 the reranked ranking with the same CosQA qrels and official COIR evaluator, then
 writes both `nDCG@10` values and their delta to
