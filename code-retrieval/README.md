@@ -35,3 +35,19 @@ same command. Generated caches, results, and metadata are written below
 Smoke output is written below `code-retrieval/artifacts/e5_baseline/`; full-run
 output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
 ignored by Git.
+
+`notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
+comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
+HyDE + re-ranking. It uses the same CosQA data, E5 first-stage candidate depth,
+qrels, and `nDCG@10` evaluator for every row. HyDE uses the local
+`google/flan-t5-base` generator, and the re-ranker uses
+`cross-encoder/ms-marco-MiniLM-L6-v2`; their resolved revisions and generation
+controls are recorded in the result metadata. The cross-encoder can only reorder
+the E5 candidate IDs. Smoke output is wiring evidence only.
+
+```bash
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+Comparison output is written below `code-retrieval/artifacts/e5_hyde_rerank/`;
+the directory is ignored by Git.
