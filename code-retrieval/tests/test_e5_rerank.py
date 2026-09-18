@@ -79,7 +79,7 @@ def test_rerank_cache_identity_includes_reranker_controls(tmp_path):
 
     changed = RerankConfig(cache_dir=str(tmp_path), reranker_batch_size=64)
 
-    assert metadata["code_version"] == "e5-rerank-v1"
+    assert metadata["code_version"] == "e5-rerank-v2-paper-faiss-ranking"
     assert rerank_run_identity(changed) != identity
     assert metadata["config"]["reranker_revision"] == config.reranker_revision
 

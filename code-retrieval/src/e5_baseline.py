@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 
 
-CODE_VERSION = "e5-baseline-v2-coir-exact-ranking"
+CODE_VERSION = "e5-baseline-v3-paper-faiss-ranking"
 DEFAULT_DATASET_REVISION = "0846fa3b963a21bead36e9fab61451fc83b777a6"
 DEFAULT_MODEL_REVISION = "f52bf8ec8c7124536f0efb74aca902b2995e5bcd"
 
@@ -46,7 +46,7 @@ class BaselineConfig:
     passage_prefix: str = "passage: "
     max_seq_length: int = 512
     batch_size: int = 32
-    candidate_depth: int = 10
+    candidate_depth: int = 1000
     normalize_embeddings: bool = True
     seed: int = 42
     device: str = "auto"
@@ -555,7 +555,13 @@ def rank_with_faiss(
     *,
     top_k: int,
 ) -> dict[str, dict[str, float]]:
-    """Exact inner-product search using the COIR paper's Flat index family."""
+    """Exact inner-product search using the paper's Faiss IndexFlat path.
+
+    The paper reports Faiss ``IndexFlat`` retrieval and evaluates the first
+    1000 retrieved candidates.  Keeping this as a direct Faiss call matters on
+    CosQA: asking Faiss for only the final metric cutoff can select a different
+    tied-document order than asking for the benchmark candidate depth first.
+    """
 
     if len(query_ids) != query_embeddings.shape[0]:
         raise ValueError("query ID count does not match query embeddings")
@@ -588,87 +594,6 @@ def rank_with_faiss(
             row[str(corpus_ids[int(position)])] = float(score)
         rankings[str(query_id)] = row
     return rankings
-
-
-def rank_with_coir_exact(
-    query_embeddings: np.ndarray,
-    corpus_embeddings: np.ndarray,
-    query_ids: Sequence[str],
-    corpus_ids: Sequence[str],
-    *,
-    corpus_records: Mapping[str, Mapping[str, str]],
-    top_k: int = 1000,
-) -> dict[str, dict[str, float]]:
-    """Use the official COIR exact-retrieval contract on precomputed vectors.
-
-    COIR's ``EvaluateRetrieval`` retrieves up to 1000 candidates, sorts the
-    corpus by title-plus-text length, and applies its deterministic heap/tie
-    handling before evaluation.  The baseline previously used a direct Faiss
-    top-10 search, which can produce materially different nDCG values on
-    CosQA because many E5 similarities are tied or nearly tied.  This adapter
-    keeps the notebook's embedding cache while delegating ranking semantics to
-    the same COIR ``DenseRetrievalExactSearch`` implementation used by the
-    benchmark.
-    """
-
-    query_ids = list(query_ids)
-    corpus_ids = list(corpus_ids)
-    if len(query_ids) != query_embeddings.shape[0]:
-        raise ValueError("query ID count does not match query embeddings")
-    if len(corpus_ids) != corpus_embeddings.shape[0]:
-        raise ValueError("corpus ID count does not match corpus embeddings")
-    if not query_ids or not corpus_ids:
-        raise ValueError("query and corpus collections must be non-empty")
-    if set(corpus_ids) != set(corpus_records):
-        raise ValueError("corpus records and corpus IDs must contain the same IDs")
-    if query_embeddings.shape[1] != corpus_embeddings.shape[1]:
-        raise ValueError("query and corpus embedding dimensions differ")
-    if top_k <= 0:
-        raise ValueError("top_k must be positive")
-
-    try:
-        from coir.beir.retrieval.evaluation import EvaluateRetrieval
-        from coir.beir.retrieval.search.dense import DenseRetrievalExactSearch
-    except ImportError as exc:
-        raise RuntimeError("coir-eval==0.7.0 is required for COIR retrieval") from exc
-
-    corpus_index = {corpus_id: index for index, corpus_id in enumerate(corpus_ids)}
-    query_index = {query_id: index for index, query_id in enumerate(query_ids)}
-
-    class _PrecomputedModel:
-        def encode_queries(self, queries: Sequence[str], **_: Any) -> np.ndarray:
-            try:
-                indices = [query_index[str(query)] for query in queries]
-            except KeyError as exc:
-                raise ValueError("COIR query lookup received an unknown query") from exc
-            return query_embeddings[indices]
-
-        def encode_corpus(
-            self, corpus: Sequence[Mapping[str, str]], **_: Any
-        ) -> np.ndarray:
-            try:
-                indices = [corpus_index[str(record["__coir_id"])] for record in corpus]
-            except (KeyError, TypeError) as exc:
-                raise ValueError("COIR corpus lookup received an unknown document") from exc
-            return corpus_embeddings[indices]
-
-    # The official loader exposes title, but the paper-compatible normalized
-    # records intentionally exclude it.  The extra private ID is used only by
-    # this adapter and is ignored by COIR's length sort.
-    search_corpus = {
-        corpus_id: {**dict(corpus_records[corpus_id]), "__coir_id": corpus_id}
-        for corpus_id in corpus_ids
-    }
-    search_queries = {query_id: query_id for query_id in query_ids}
-    k_values = [k for k in (1, 3, 5, 10, 100, 1000) if k <= top_k]
-    if not k_values:
-        k_values = [top_k]
-    retriever = EvaluateRetrieval(
-        DenseRetrievalExactSearch(_PrecomputedModel(), batch_size=128),
-        k_values=k_values,
-        score_function="cos_sim",
-    )
-    return retriever.retrieve(search_corpus, search_queries)
 
 
 def evaluate_ndcg_at_10(

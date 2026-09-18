@@ -7,7 +7,7 @@ from e5_baseline import (
     expected_cache_metadata,
     load_valid_embedding_cache,
     normalize_cosqa_records,
-    rank_with_coir_exact,
+    rank_with_faiss,
     run_identity,
     save_embedding_cache,
     select_run_data,
@@ -85,13 +85,9 @@ def test_config_rejects_unknown_run_mode():
         raise AssertionError("invalid run mode was accepted")
 
 
-def test_coir_exact_ranking_uses_full_candidate_depth_and_preserves_corpus_contract():
-    corpus = {
-        "d1": {"text": "short"},
-        "d2": {"text": "a much longer document"},
-        "d3": {"text": "medium document"},
-    }
-    rankings = rank_with_coir_exact(
+def test_faiss_ranking_uses_configured_candidate_depth_and_preserves_corpus_contract():
+    corpus_ids = ["d1", "d2", "d3"]
+    rankings = rank_with_faiss(
         np.asarray(
             [
                 [1.0, 0.0],
@@ -108,11 +104,10 @@ def test_coir_exact_ranking_uses_full_candidate_depth_and_preserves_corpus_contr
             dtype=np.float32,
         ),
         ["q1", "q2"],
-        list(corpus),
-        corpus_records=corpus,
+        corpus_ids,
         top_k=1000,
     )
 
     assert set(rankings) == {"q1", "q2"}
-    assert all(set(row) == set(corpus) for row in rankings.values())
-    assert all(len(row) == len(corpus) for row in rankings.values())
+    assert all(set(row) == set(corpus_ids) for row in rankings.values())
+    assert all(len(row) == len(corpus_ids) for row in rankings.values())

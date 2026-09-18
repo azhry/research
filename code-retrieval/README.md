@@ -6,8 +6,16 @@ the CosQA E5-base-v2 baseline. The full-dataset entry point is
 and refuses to write a result if a subset is selected. Both notebooks load the
 pinned Hugging Face dataset revision, use text-only `query: ` / `passage: `
 inputs, and evaluate with the COIR evaluator at `nDCG@10`.
-The baseline retrieval depth is 1000, matching the official COIR evaluator's
-default candidate depth; the primary reported metric remains `nDCG@10`.
+The baseline retrieval uses the paper's exact Faiss `IndexFlat` inner-product
+path with a 1000-document candidate depth; the primary reported metric remains
+`nDCG@10`.
+
+The paper-compatible controls are E5-base-v2, 512-token inputs, mean-pooled
+embeddings, cosine/inner-product ranking, Faiss `IndexFlat`, and a 1,000-result
+retrieval depth. The paper's historical environment was PyTorch 2.0.1 and
+Transformers 4.38.1; every actual run records its installed versions in
+`metadata.json` so a newer local runtime is not mistaken for an exact
+environment reproduction.
 
 Install the declared dependencies before opening the notebook:
 
@@ -40,8 +48,8 @@ ignored by Git.
 
 ## E5 + rerank
 
-`notebooks/e5_rerank_experiment.ipynb` reuses the official COIR E5 first-stage
-contract and scores its top-1000 candidate pool with
+`notebooks/e5_rerank_experiment.ipynb` reuses the paper-faithful Faiss E5
+first-stage contract and scores its top-1000 candidate pool with
 `cross-encoder/ms-marco-MiniLM-L6-v2`. It evaluates the original E5 ranking and
 the reranked ranking with the same CosQA qrels and official COIR evaluator, then
 writes both `nDCG@10` values and their delta to

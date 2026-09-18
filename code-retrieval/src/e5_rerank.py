@@ -27,7 +27,7 @@ from e5_baseline import (
     git_commit,
     load_valid_embedding_cache,
     load_valid_json_cache,
-    rank_with_coir_exact,
+    rank_with_faiss,
     save_embedding_cache,
     save_json_cache,
     set_seed,
@@ -37,7 +37,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-rerank-v1"
+CODE_VERSION = "e5-rerank-v2-paper-faiss-ranking"
 DEFAULT_RERANKER_ID = "cross-encoder/ms-marco-MiniLM-L6-v2"
 DEFAULT_RERANKER_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 
@@ -411,7 +411,7 @@ __all__ = [
     "expected_rerank_cache_metadata",
     "load_valid_embedding_cache",
     "load_valid_json_cache",
-    "rank_with_coir_exact",
+    "rank_with_faiss",
     "rerank_cache_paths",
     "rerank_rankings",
     "rerank_run_identity",
