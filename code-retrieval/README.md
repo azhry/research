@@ -35,3 +35,32 @@ same command. Generated caches, results, and metadata are written below
 Smoke output is written below `code-retrieval/artifacts/e5_baseline/`; full-run
 output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
 ignored by Git.
+
+## E5 + rerank
+
+`notebooks/e5_rerank_experiment.ipynb` reuses the E5 first-stage contract and
+scores only its top-10 candidate pool with
+`cross-encoder/ms-marco-MiniLM-L6-v2`. It evaluates the original E5 ranking and
+the reranked ranking with the same CosQA qrels and official COIR evaluator, then
+writes both `nDCG@10` values and their delta to
+`artifacts/e5_rerank/result.json`. The reranker revision, max length, batch
+size, device, seed, cache identity, timings, and provenance are recorded.
+
+The default is a real-model smoke run and is not benchmark evidence:
+
+```bash
+python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_rerank_experiment.ipynb --output e5_rerank_smoke.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+Run the complete comparison with:
+
+```bash
+E5_RERANK_MODE=benchmark E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_rerank_experiment.ipynb --output e5_rerank_full.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+On PowerShell, set the variables with `$env:E5_RERANK_MODE='benchmark'` and
+the corresponding `$env:` assignments before the same command. Smoke and
+full-run output is written below `code-retrieval/artifacts/e5_rerank/`, which is
+ignored by Git. Benchmark evidence is valid only when the notebook uses the
+complete declared query and corpus populations with real E5 and cross-encoder
+inference.
