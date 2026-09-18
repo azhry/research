@@ -39,11 +39,10 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v1"
+CODE_VERSION = "e5-hyde-rerank-v2"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_HYDE_PROMPT = (
-    "Write a concise hypothetical answer describing Python code that solves this "
-    "query. Do not mention this instruction or invent external context.\n\nQuery: {query}"
+    "Answer this programming question with a concise solution: {query}"
 )
 
 
