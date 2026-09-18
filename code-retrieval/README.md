@@ -35,3 +35,30 @@ same command. Generated caches, results, and metadata are written below
 Smoke output is written below `code-retrieval/artifacts/e5_baseline/`; full-run
 output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
 ignored by Git.
+
+## E5 + HyDE
+
+`notebooks/e5_hyde_experiment.ipynb` adds one real, deterministic HyDE
+hypothesis from `google/flan-t5-base` to each original CosQA test query, then
+uses the same E5, corpus, candidate depth, qrels, and COIR evaluator as the
+baseline. The generator revision, prompt, generation settings, expanded-query
+strategy, and separate cache identity are persisted with the result. HyDE does
+not receive answers, qrels, labels, or target documents.
+
+The smoke notebook run is wiring evidence only:
+
+```bash
+cd code-retrieval
+E5_HYDE_MODE=smoke python -m nbconvert --to notebook --execute notebooks/e5_hyde_experiment.ipynb --output e5_hyde_smoke.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+Run the complete declared benchmark only when model and dataset downloads and
+available memory are sufficient:
+
+```bash
+cd code-retrieval
+E5_HYDE_MODE=benchmark E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute notebooks/e5_hyde_experiment.ipynb --output e5_hyde_full.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+HyDE output is written below `code-retrieval/artifacts/e5_hyde/`; generated
+notebooks, caches, results, and metadata are ignored by Git.
