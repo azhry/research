@@ -39,11 +39,12 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v2"
+CODE_VERSION = "e5-hyde-rerank-v3"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_HYDE_PROMPT = (
     "Answer this programming question with a concise solution: {query}"
 )
+DEFAULT_HYDE_FALLBACK_PROMPT = "Provide a short answer to the following: {query}"
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class ExperimentConfig(BaselineConfig):
     hyde_model_id: str = "google/flan-t5-base"
     hyde_model_revision: str = "main"
     hyde_prompt: str = DEFAULT_HYDE_PROMPT
+    hyde_fallback_prompt: str = DEFAULT_HYDE_FALLBACK_PROMPT
     hyde_num_hypotheses: int = 1
     hyde_temperature: float = 1.0
     hyde_max_new_tokens: int = 64
@@ -202,6 +204,7 @@ class HyDEGenerator:
         )
         self.model.to(self.device)
         self.model.eval()
+        self.fallback_query_ids: list[str] = []
         self.resolved_revision = _require_resolved_revision(
             self.model, config.hyde_model_revision, "HyDE generator"
         )
@@ -214,44 +217,69 @@ class HyDEGenerator:
             prompts.append((str(query_id), self.config.hyde_prompt.format(query=query)))
         return prompts
 
-    def generate(self, queries: Mapping[str, str]) -> dict[str, list[str]]:
-        prompts = self._prompts(queries)
-        generated: dict[str, list[str]] = {}
-        sample = self.config.hyde_do_sample or self.config.hyde_num_hypotheses > 1
-        for start in range(0, len(prompts), self.config.batch_size):
-            batch = prompts[start : start + self.config.batch_size]
-            encoded = self.tokenizer(
-                [prompt for _, prompt in batch],
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.config.max_seq_length,
+    def _generate_batch(self, batch: Sequence[tuple[str, str]], *, sample: bool) -> list[list[str]]:
+        encoded = self.tokenizer(
+            [prompt for _, prompt in batch],
+            return_tensors="pt",
+            padding=True,
+            truncation=True,
+            max_length=self.config.max_seq_length,
+        )
+        encoded = {key: value.to(self.device) for key, value in encoded.items()}
+        generation_kwargs: dict[str, Any] = {
+            "max_new_tokens": self.config.hyde_max_new_tokens,
+            "num_return_sequences": self.config.hyde_num_hypotheses,
+            "do_sample": sample,
+        }
+        if sample:
+            generation_kwargs["temperature"] = self.config.hyde_temperature
+        with self.torch.no_grad():
+            output = self.model.generate(**encoded, **generation_kwargs)
+        decoded = self.tokenizer.batch_decode(output, skip_special_tokens=True)
+        expected = len(batch) * self.config.hyde_num_hypotheses
+        if len(decoded) != expected:
+            raise RuntimeError(
+                f"HyDE generator returned {len(decoded)} outputs; expected {expected}"
             )
-            encoded = {key: value.to(self.device) for key, value in encoded.items()}
-            generation_kwargs: dict[str, Any] = {
-                "max_new_tokens": self.config.hyde_max_new_tokens,
-                "num_return_sequences": self.config.hyde_num_hypotheses,
-                "do_sample": sample,
-            }
-            if sample:
-                generation_kwargs["temperature"] = self.config.hyde_temperature
-            with self.torch.no_grad():
-                output = self.model.generate(**encoded, **generation_kwargs)
-            decoded = self.tokenizer.batch_decode(output, skip_special_tokens=True)
-            expected = len(batch) * self.config.hyde_num_hypotheses
-            if len(decoded) != expected:
-                raise RuntimeError(
-                    f"HyDE generator returned {len(decoded)} outputs; expected {expected}"
-                )
-            for index, (query_id, _) in enumerate(batch):
-                values = decoded[
+        return [
+            [
+                value.strip()
+                for value in decoded[
                     index * self.config.hyde_num_hypotheses : (index + 1)
                     * self.config.hyde_num_hypotheses
                 ]
-                clean = [value.strip() for value in values if value.strip()]
+                if value.strip()
+            ]
+            for index in range(len(batch))
+        ]
+
+    def generate(self, queries: Mapping[str, str]) -> dict[str, list[str]]:
+        prompts = self._prompts(queries)
+        generated: dict[str, list[str]] = {}
+        fallback_ids: list[str] = []
+        sample = self.config.hyde_do_sample or self.config.hyde_num_hypotheses > 1
+        for start in range(0, len(prompts), self.config.batch_size):
+            batch = prompts[start : start + self.config.batch_size]
+            decoded_values = self._generate_batch(batch, sample=sample)
+            for (query_id, _), clean in zip(batch, decoded_values):
                 if len(clean) != self.config.hyde_num_hypotheses:
-                    raise RuntimeError(f"HyDE generator returned empty text for query {query_id}")
-                generated[query_id] = clean
+                    fallback_ids.append(query_id)
+                else:
+                    generated[query_id] = clean
+
+        if fallback_ids:
+            fallback_prompts = [
+                (query_id, self.config.hyde_fallback_prompt.format(query=queries[query_id]))
+                for query_id in fallback_ids
+            ]
+            for start in range(0, len(fallback_prompts), self.config.batch_size):
+                batch = fallback_prompts[start : start + self.config.batch_size]
+                decoded_values = self._generate_batch(batch, sample=sample)
+                for (query_id, _), clean in zip(batch, decoded_values):
+                    if len(clean) != self.config.hyde_num_hypotheses:
+                        raise RuntimeError(f"HyDE generator returned empty text for query {query_id}")
+                    generated[query_id] = clean
+                    self.fallback_query_ids.append(query_id)
         if set(generated) != set(queries):
             raise RuntimeError("HyDE output query IDs do not match the input query IDs")
         return generated
@@ -546,6 +574,8 @@ def build_comparison_result(
             "configured_revision": config.hyde_model_revision,
             "resolved_revision": revisions.hyde,
             "prompt": config.hyde_prompt,
+            "fallback_prompt": config.hyde_fallback_prompt,
+            "fallback_query_count": int(environment.get("hyde_fallback_query_count", 0)),
             "num_hypotheses": config.hyde_num_hypotheses,
             "temperature": config.hyde_temperature,
             "max_new_tokens": config.hyde_max_new_tokens,
@@ -749,6 +779,7 @@ def run_experiment(
         metadata=hyde_meta,
         produce=lambda: hyde.generate(query_texts),
     )
+    environment["hyde_fallback_query_count"] = len(hyde.fallback_query_ids)
     hyde.close()
     hyde_representations = {
         query_id: combine_hypotheses(
