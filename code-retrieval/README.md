@@ -6,6 +6,16 @@ the CosQA E5-base-v2 baseline. The full-dataset entry point is
 and refuses to write a result if a subset is selected. Both notebooks load the
 pinned Hugging Face dataset revision, use text-only `query: ` / `passage: `
 inputs, and evaluate with the COIR evaluator at `nDCG@10`.
+The baseline retrieval uses the paper's exact Faiss `IndexFlat` inner-product
+path with a 1000-document candidate depth; the primary reported metric remains
+`nDCG@10`.
+
+The paper-compatible controls are E5-base-v2, 512-token inputs, mean-pooled
+embeddings, cosine/inner-product ranking, Faiss `IndexFlat`, and a 1,000-result
+retrieval depth. The paper's historical environment was PyTorch 2.0.1 and
+Transformers 4.38.1; every actual run records its installed versions in
+`metadata.json` so a newer local runtime is not mistaken for an exact
+environment reproduction.
 
 Install the declared dependencies before opening the notebook:
 
@@ -31,7 +41,36 @@ E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to 
 ```
 
 On PowerShell, use `$env:E5_BASELINE_MODE='benchmark'` in the session before the
-same command. Generated caches, results, and metadata are written below
-Smoke output is written below `code-retrieval/artifacts/e5_baseline/`; full-run
+same command. Smoke output is written below
+`code-retrieval/artifacts/e5_baseline/`; full-run
 output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
 ignored by Git.
+
+## E5 + rerank
+
+`notebooks/e5_rerank_experiment.ipynb` reuses the paper-faithful Faiss E5
+first-stage contract and scores its top-1000 candidate pool with
+`cross-encoder/ms-marco-MiniLM-L6-v2`. It evaluates the original E5 ranking and
+the reranked ranking with the same CosQA qrels and official COIR evaluator, then
+writes both `nDCG@10` values and their delta to
+`artifacts/e5_rerank/result.json`. The reranker revision, max length, batch
+size, device, seed, cache identity, timings, and provenance are recorded.
+
+The default is a real-model smoke run and is not benchmark evidence:
+
+```bash
+python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_rerank_experiment.ipynb --output e5_rerank_smoke.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+Run the complete comparison with:
+
+```bash
+E5_RERANK_MODE=benchmark E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_rerank_experiment.ipynb --output e5_rerank_full.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+On PowerShell, set the variables with `$env:E5_RERANK_MODE='benchmark'` and
+the corresponding `$env:` assignments before the same command. Smoke and
+full-run output is written below `code-retrieval/artifacts/e5_rerank/`, which is
+ignored by Git. Benchmark evidence is valid only when the notebook uses the
+complete declared query and corpus populations with real E5 and cross-encoder
+inference.
