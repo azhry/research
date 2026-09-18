@@ -39,12 +39,17 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v3"
+CODE_VERSION = "e5-hyde-rerank-v4"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_HYDE_PROMPT = (
     "Answer this programming question with a concise solution: {query}"
 )
-DEFAULT_HYDE_FALLBACK_PROMPT = "Provide a short answer to the following: {query}"
+DEFAULT_HYDE_FALLBACK_PROMPTS = (
+    "Provide a short answer to the following: {query}",
+    "Python solution: {query}",
+    "Write code for: {query}",
+    "Give a Python example for: {query}",
+)
 
 
 @dataclass(frozen=True)
@@ -58,7 +63,7 @@ class ExperimentConfig(BaselineConfig):
     hyde_model_id: str = "google/flan-t5-base"
     hyde_model_revision: str = "main"
     hyde_prompt: str = DEFAULT_HYDE_PROMPT
-    hyde_fallback_prompt: str = DEFAULT_HYDE_FALLBACK_PROMPT
+    hyde_fallback_prompts: tuple[str, ...] = DEFAULT_HYDE_FALLBACK_PROMPTS
     hyde_num_hypotheses: int = 1
     hyde_temperature: float = 1.0
     hyde_max_new_tokens: int = 64
@@ -79,6 +84,8 @@ class ExperimentConfig(BaselineConfig):
             raise ValueError("hyde_temperature must be positive")
         if self.hyde_max_new_tokens <= 0:
             raise ValueError("hyde_max_new_tokens must be positive")
+        if not self.hyde_fallback_prompts:
+            raise ValueError("hyde_fallback_prompts must not be empty")
         if self.hyde_combination_strategy not in {"hypothesis_only", "query_plus_hypotheses"}:
             raise ValueError(
                 "hyde_combination_strategy must be 'hypothesis_only' or "
@@ -267,19 +274,27 @@ class HyDEGenerator:
                 else:
                     generated[query_id] = clean
 
-        if fallback_ids:
+        pending_fallback_ids = list(fallback_ids)
+        for fallback_prompt in self.config.hyde_fallback_prompts:
+            if not pending_fallback_ids:
+                break
+            next_pending_ids: list[str] = []
             fallback_prompts = [
-                (query_id, self.config.hyde_fallback_prompt.format(query=queries[query_id]))
-                for query_id in fallback_ids
+                (query_id, fallback_prompt.format(query=queries[query_id]))
+                for query_id in pending_fallback_ids
             ]
             for start in range(0, len(fallback_prompts), self.config.batch_size):
                 batch = fallback_prompts[start : start + self.config.batch_size]
                 decoded_values = self._generate_batch(batch, sample=sample)
                 for (query_id, _), clean in zip(batch, decoded_values):
                     if len(clean) != self.config.hyde_num_hypotheses:
-                        raise RuntimeError(f"HyDE generator returned empty text for query {query_id}")
-                    generated[query_id] = clean
-                    self.fallback_query_ids.append(query_id)
+                        next_pending_ids.append(query_id)
+                    else:
+                        generated[query_id] = clean
+                        self.fallback_query_ids.append(query_id)
+            pending_fallback_ids = next_pending_ids
+        if pending_fallback_ids:
+            raise RuntimeError(f"HyDE generator returned empty text for query {pending_fallback_ids[0]}")
         if set(generated) != set(queries):
             raise RuntimeError("HyDE output query IDs do not match the input query IDs")
         return generated
@@ -574,7 +589,7 @@ def build_comparison_result(
             "configured_revision": config.hyde_model_revision,
             "resolved_revision": revisions.hyde,
             "prompt": config.hyde_prompt,
-            "fallback_prompt": config.hyde_fallback_prompt,
+            "fallback_prompts": list(config.hyde_fallback_prompts),
             "fallback_query_count": int(environment.get("hyde_fallback_query_count", 0)),
             "num_hypotheses": config.hyde_num_hypotheses,
             "temperature": config.hyde_temperature,
