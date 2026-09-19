@@ -23,7 +23,7 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 
 
-CODE_VERSION = "e5-baseline-v1"
+CODE_VERSION = "e5-baseline-v3-paper-faiss-ranking"
 DEFAULT_DATASET_REVISION = "0846fa3b963a21bead36e9fab61451fc83b777a6"
 DEFAULT_MODEL_REVISION = "f52bf8ec8c7124536f0efb74aca902b2995e5bcd"
 
@@ -46,7 +46,7 @@ class BaselineConfig:
     passage_prefix: str = "passage: "
     max_seq_length: int = 512
     batch_size: int = 32
-    candidate_depth: int = 10
+    candidate_depth: int = 1000
     normalize_embeddings: bool = True
     seed: int = 42
     device: str = "auto"
@@ -555,7 +555,13 @@ def rank_with_faiss(
     *,
     top_k: int,
 ) -> dict[str, dict[str, float]]:
-    """Exact inner-product search using the COIR paper's Flat index family."""
+    """Exact inner-product search using the paper's Faiss IndexFlat path.
+
+    The paper reports Faiss ``IndexFlat`` retrieval and evaluates the first
+    1000 retrieved candidates. Keeping this as a direct Faiss call matters on
+    CosQA: asking Faiss for only the final metric cutoff can select a different
+    tied-document order than asking for the benchmark candidate depth first.
+    """
 
     if len(query_ids) != query_embeddings.shape[0]:
         raise ValueError("query ID count does not match query embeddings")

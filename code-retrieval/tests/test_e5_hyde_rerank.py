@@ -2,6 +2,7 @@ import json
 
 from e5_baseline import CosQAData, RunData
 from e5_hyde_rerank import (
+    CODE_VERSION,
     ExperimentConfig,
     ModelRevisions,
     SYSTEM_IDS,
@@ -18,7 +19,8 @@ from e5_hyde_rerank import (
 def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
-    assert config.candidate_depth == 100
+    assert config.candidate_depth == 1000
+    assert CODE_VERSION == "e5-hyde-rerank-v5-paper-faiss-ranking"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
     assert config.hyde_combination_strategy == "hypothesis_only"

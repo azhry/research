@@ -39,7 +39,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v4"
+CODE_VERSION = "e5-hyde-rerank-v5-paper-faiss-ranking"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_HYDE_PROMPT = (
     "Answer this programming question with a concise solution: {query}"
@@ -56,7 +56,7 @@ DEFAULT_HYDE_FALLBACK_PROMPTS = (
 class ExperimentConfig(BaselineConfig):
     """Explicit controls shared by all four comparison systems."""
 
-    candidate_depth: int = 100
+    candidate_depth: int = 1000
     batch_size: int = 32
     cache_dir: str = "artifacts/e5_hyde_rerank/cache"
     artifact_dir: str = "artifacts/e5_hyde_rerank"

@@ -6,6 +6,9 @@ the CosQA E5-base-v2 baseline. The full-dataset entry point is
 and refuses to write a result if a subset is selected. Both notebooks load the
 pinned Hugging Face dataset revision, use text-only `query: ` / `passage: `
 inputs, and evaluate with the COIR evaluator at `nDCG@10`.
+The baseline uses the paper-faithful exact Faiss `IndexFlatIP` path with a
+1,000-document first-stage candidate depth; the primary reported metric remains
+`nDCG@10`.
 
 Install the declared dependencies before opening the notebook:
 
@@ -38,7 +41,8 @@ ignored by Git.
 
 `notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
 comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
-HyDE + re-ranking. It uses the same CosQA data, E5 first-stage candidate depth,
+HyDE + re-ranking. It uses the same CosQA data, paper-faithful E5
+`IndexFlatIP` first-stage retrieval at candidate depth 1,000,
 qrels, and `nDCG@10` evaluator for every row. HyDE uses the local
 `google/flan-t5-base` generator, and the re-ranker uses
 `cross-encoder/ms-marco-MiniLM-L6-v2`; their resolved revisions and generation
