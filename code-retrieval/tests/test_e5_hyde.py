@@ -26,6 +26,7 @@ def test_config_records_explicit_hyde_controls():
     assert config.generator_revision == DEFAULT_GENERATOR_REVISION
     assert config.prompt_template == DEFAULT_HYDE_PROMPT
     assert config.num_hypotheses == 1
+    assert config.candidate_depth == 1000
     assert config.temperature == 0.0
     assert config.max_new_tokens == 128
     assert config.stop_behavior == "eos_or_pad"
@@ -84,12 +85,16 @@ def test_hyde_cache_identity_changes_with_prompt_or_generator_revision(tmp_path)
     changed_revision = HyDEConfig(
         cache_dir=str(tmp_path), generator_revision="different-revision"
     )
+    changed_depth = HyDEConfig(cache_dir=str(tmp_path), candidate_depth=10)
 
     assert first != hyde_run_identity(
         changed_prompt, repo_root=tmp_path, notebook_sha256="notebook-a"
     )
     assert first != hyde_run_identity(
         changed_revision, repo_root=tmp_path, notebook_sha256="notebook-a"
+    )
+    assert first != hyde_run_identity(
+        changed_depth, repo_root=tmp_path, notebook_sha256="notebook-a"
     )
     assert first != hyde_run_identity(
         config, repo_root=tmp_path, notebook_sha256="notebook-b"

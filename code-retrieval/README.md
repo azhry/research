@@ -7,6 +7,11 @@ and refuses to write a result if a subset is selected. Both notebooks load the
 pinned Hugging Face dataset revision, use text-only `query: ` / `passage: `
 inputs, and evaluate with the COIR evaluator at `nDCG@10`.
 
+The baseline retrieval follows the paper-faithful exact Faiss `IndexFlatIP`
+path over normalized E5 embeddings with a 1,000-document candidate depth. The
+actual runtime and package versions are persisted with each result; smoke runs
+are wiring evidence only and are not comparable benchmark results.
+
 Install the declared dependencies before opening the notebook:
 
 ```bash
@@ -40,10 +45,11 @@ ignored by Git.
 
 `notebooks/e5_hyde_experiment.ipynb` adds one real, deterministic HyDE
 hypothesis from `google/flan-t5-base` to each original CosQA test query, then
-uses the same E5, corpus, candidate depth, qrels, and COIR evaluator as the
-baseline. The generator revision, prompt, generation settings, expanded-query
-strategy, and separate cache identity are persisted with the result. HyDE does
-not receive answers, qrels, labels, or target documents.
+uses the same paper-faithful E5 first stage, full corpus, 1,000-document
+candidate depth, qrels, and COIR evaluator as the baseline. The generator
+revision, prompt, generation settings, expanded-query strategy, and separate
+cache identity are persisted with the result. HyDE does not receive answers,
+qrels, labels, or target documents.
 
 The smoke notebook run is wiring evidence only:
 

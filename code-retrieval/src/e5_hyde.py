@@ -30,7 +30,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-v1"
+CODE_VERSION = "e5-hyde-v2-paper-faiss-ranking"
 DEFAULT_GENERATOR_REVISION = "7bcac572ce56db69c1ea7c8af255c5d7c9672fc2"
 DEFAULT_HYDE_PROMPT = (
     "Write a concise hypothetical code-oriented answer for the following Python "
