@@ -31,6 +31,7 @@ def test_config_records_explicit_hyde_controls():
     assert config.max_new_tokens == 128
     assert config.stop_behavior == "eos_or_pad"
     assert config.combination_strategy == "original_plus_hypothesis"
+    assert config.empty_hypothesis_behavior == "original_query_fallback"
 
 
 @pytest.mark.parametrize(
@@ -42,6 +43,7 @@ def test_config_records_explicit_hyde_controls():
         {"max_new_tokens": 0},
         {"stop_behavior": "custom"},
         {"combination_strategy": "hypothesis_only"},
+        {"empty_hypothesis_behavior": "ignore"},
     ],
 )
 def test_config_rejects_unsupported_or_invalid_controls(kwargs):
@@ -74,6 +76,14 @@ def test_hypotheses_must_match_query_ids_and_be_non_empty():
         validate_hypotheses({"q1": "one"}, {"q2": "generated"})
     with pytest.raises(ValueError, match="empty"):
         validate_hypotheses({"q1": "one"}, {"q1": "  "})
+
+
+def test_empty_hypothesis_can_explicitly_fallback_to_original_query():
+    assert validate_hypotheses(
+        {"q1": "find a parser"},
+        {"q1": "  "},
+        empty_hypothesis_behavior="original_query_fallback",
+    ) == {"q1": "find a parser"}
 
 
 def test_hyde_cache_identity_changes_with_prompt_or_generator_revision(tmp_path):
@@ -158,5 +168,6 @@ def test_result_contract_identifies_hyde_and_provenance(tmp_path):
     assert result["system"]["query_expansion"] == "HyDE"
     assert result["tqe"]["generator"]["revision"] == DEFAULT_GENERATOR_REVISION
     assert result["tqe"]["combination_strategy"] == "original_plus_hypothesis"
+    assert result["tqe"]["empty_hypothesis_behavior"] == "original_query_fallback"
     assert result["artifact_provenance"]["synthetic_hypotheses"] is False
     assert result["artifact_provenance"]["synthetic_scores"] is False

@@ -47,8 +47,11 @@ ignored by Git.
 hypothesis from `google/flan-t5-base` to each original CosQA test query, then
 uses the same paper-faithful E5 first stage, full corpus, 1,000-document
 candidate depth, qrels, and COIR evaluator as the baseline. The generator
-revision, prompt, generation settings, expanded-query strategy, and separate
-cache identity are persisted with the result. HyDE does not receive answers,
+revision, prompt, generation settings, expanded-query strategy, empty-output
+policy, and separate cache identity are persisted with the result. If the
+generator emits only special tokens, the declared `original_query_fallback`
+policy keeps that query's representation equal to the original query; it does
+not invent a hypothesis or use evaluation data. HyDE does not receive answers,
 qrels, labels, or target documents.
 
 The smoke notebook run is wiring evidence only:

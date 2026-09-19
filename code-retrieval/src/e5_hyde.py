@@ -30,7 +30,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-v2-paper-faiss-ranking"
+CODE_VERSION = "e5-hyde-v3-paper-faiss-empty-policy"
 DEFAULT_GENERATOR_REVISION = "7bcac572ce56db69c1ea7c8af255c5d7c9672fc2"
 DEFAULT_HYDE_PROMPT = (
     "Write a concise hypothetical code-oriented answer for the following Python "
@@ -53,6 +53,7 @@ class HyDEConfig(BaselineConfig):
     generation_batch_size: int = 8
     stop_behavior: str = "eos_or_pad"
     combination_strategy: str = "original_plus_hypothesis"
+    empty_hypothesis_behavior: str = "original_query_fallback"
     cache_dir: str = "artifacts/e5_hyde/cache"
     artifact_dir: str = "artifacts/e5_hyde"
 
@@ -75,6 +76,10 @@ class HyDEConfig(BaselineConfig):
         if self.combination_strategy != "original_plus_hypothesis":
             raise ValueError(
                 "combination_strategy must be original_plus_hypothesis"
+            )
+        if self.empty_hypothesis_behavior not in {"error", "original_query_fallback"}:
+            raise ValueError(
+                "empty_hypothesis_behavior must be error or original_query_fallback"
             )
 
 
@@ -162,9 +167,17 @@ def build_hyde_prompts(
 
 
 def validate_hypotheses(
-    queries: Mapping[str, str], hypotheses: Mapping[str, str]
+    queries: Mapping[str, str],
+    hypotheses: Mapping[str, str],
+    *,
+    empty_hypothesis_behavior: str = "error",
 ) -> dict[str, str]:
-    """Require exactly one non-empty hypothesis for every original query."""
+    """Validate one hypothesis per query with an explicit empty-output policy."""
+
+    if empty_hypothesis_behavior not in {"error", "original_query_fallback"}:
+        raise ValueError(
+            "empty_hypothesis_behavior must be error or original_query_fallback"
+        )
 
     expected_ids = list(queries)
     if list(hypotheses) != expected_ids:
@@ -173,7 +186,10 @@ def validate_hypotheses(
     for query_id in expected_ids:
         value = str(hypotheses[query_id]).strip()
         if not value:
-            raise ValueError(f"hypothesis for query {query_id} is empty")
+            if empty_hypothesis_behavior == "original_query_fallback":
+                value = str(queries[query_id]).strip()
+            else:
+                raise ValueError(f"hypothesis for query {query_id} is empty")
         normalized[query_id] = value
     return normalized
 
@@ -250,7 +266,11 @@ class HyDEGenerator:
             hypotheses.update(
                 {query_id: text for query_id, text in zip(batch_ids, decoded)}
             )
-        return validate_hypotheses(queries, hypotheses)
+        return validate_hypotheses(
+            queries,
+            hypotheses,
+            empty_hypothesis_behavior=self.config.empty_hypothesis_behavior,
+        )
 
 
 def build_hyde_result(
@@ -296,6 +316,7 @@ def build_hyde_result(
         "max_new_tokens": config.max_new_tokens,
         "stop_behavior": config.stop_behavior,
         "combination_strategy": config.combination_strategy,
+        "empty_hypothesis_behavior": config.empty_hypothesis_behavior,
         "hypothesis_count": hypothesis_count,
     }
     result["notebook_sha256"] = notebook_sha256
