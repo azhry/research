@@ -6,6 +6,8 @@ the CosQA E5-base-v2 baseline. The full-dataset entry point is
 and refuses to write a result if a subset is selected. Both notebooks load the
 pinned Hugging Face dataset revision, use text-only `query: ` / `passage: `
 inputs, and evaluate with the COIR evaluator at `nDCG@10`.
+The baseline uses the paper's exact Faiss `IndexFlat` inner-product path with
+a 1,000-document candidate depth; its primary metric remains `nDCG@10`.
 
 Install the declared dependencies before opening the notebook:
 
