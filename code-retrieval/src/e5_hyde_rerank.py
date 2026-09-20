@@ -39,8 +39,10 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v5-paper-faiss-ranking"
+CODE_VERSION = "e5-hyde-rerank-v6-batched-rrf-ensemble"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
+DEFAULT_RRF_K = 60
+DEFAULT_FUSION_WEIGHTS = (0.90, 0.05, 0.04, 0.01)
 DEFAULT_HYDE_PROMPT = (
     "Answer this programming question with a concise solution: {query}"
 )
@@ -75,6 +77,8 @@ class ExperimentConfig(BaselineConfig):
     reranker_batch_size: int = 32
     reranker_max_length: int = 512
     reranker_device: str = "auto"
+    rrf_k: int = DEFAULT_RRF_K
+    fusion_weights: tuple[float, ...] = DEFAULT_FUSION_WEIGHTS
 
     def __post_init__(self) -> None:
         super().__post_init__()
@@ -93,6 +97,12 @@ class ExperimentConfig(BaselineConfig):
             )
         if self.reranker_batch_size <= 0 or self.reranker_max_length <= 0:
             raise ValueError("reranker_batch_size and reranker_max_length must be positive")
+        if self.rrf_k <= 0:
+            raise ValueError("rrf_k must be positive")
+        if len(self.fusion_weights) != len(SYSTEM_IDS):
+            raise ValueError("fusion_weights must contain one value per comparison system")
+        if any(weight < 0 for weight in self.fusion_weights) or not any(self.fusion_weights):
+            raise ValueError("fusion_weights must be non-negative and contain a positive value")
 
 
 @dataclass(frozen=True)
@@ -363,7 +373,8 @@ def rerank_candidate_rankings(
 ) -> dict[str, dict[str, float]]:
     """Reorder exactly the first-stage candidate IDs, never add new documents."""
 
-    reranked: dict[str, dict[str, float]] = {}
+    candidate_groups: list[tuple[str, list[str]]] = []
+    pairs: list[tuple[str, str]] = []
     for query_id, candidate_scores in first_stage_rankings.items():
         if query_id not in query_representations:
             raise ValueError(f"missing query representation for {query_id}")
@@ -374,12 +385,20 @@ def rerank_candidate_rankings(
             passages = [corpus[doc_id]["text"] for doc_id in candidate_ids]
         except KeyError as exc:
             raise ValueError(f"candidate is missing from corpus: {exc.args[0]}") from exc
-        scores = np.asarray(
-            score_pairs([(query_representations[query_id], passage) for passage in passages]),
-            dtype=np.float32,
-        ).reshape(-1)
-        if scores.shape[0] != len(candidate_ids) or not np.isfinite(scores).all():
-            raise ValueError(f"invalid reranker scores for {query_id}")
+        candidate_groups.append((query_id, candidate_ids))
+        pairs.extend((query_representations[query_id], passage) for passage in passages)
+
+    if not pairs:
+        raise ValueError("cannot score an empty candidate collection")
+    all_scores = np.asarray(score_pairs(pairs), dtype=np.float32).reshape(-1)
+    if all_scores.shape[0] != len(pairs) or not np.isfinite(all_scores).all():
+        raise ValueError("invalid reranker scores")
+
+    reranked: dict[str, dict[str, float]] = {}
+    offset = 0
+    for query_id, candidate_ids in candidate_groups:
+        scores = all_scores[offset : offset + len(candidate_ids)]
+        offset += len(candidate_ids)
         positions = sorted(
             range(len(candidate_ids)),
             key=lambda index: (-float(scores[index]), index),
@@ -390,6 +409,52 @@ def rerank_candidate_rankings(
         if set(reranked[query_id]) != set(candidate_ids):
             raise AssertionError(f"reranker changed the candidate set for {query_id}")
     return reranked
+
+
+def reciprocal_rank_fusion(
+    rankings: Sequence[Mapping[str, Mapping[str, float]]],
+    *,
+    weights: Sequence[float],
+    top_k: int,
+    rrf_k: int = DEFAULT_RRF_K,
+) -> dict[str, dict[str, float]]:
+    """Fuse ranked candidate lists while preserving deterministic source order.
+
+    Each input ranking is a Faiss- or reranker-ordered mapping. The returned
+    scores are unique enough for the official evaluator to retain the explicit
+    fused order, including when the first-stage model produced tied scores.
+    """
+
+    if not rankings:
+        raise ValueError("at least one ranking collection is required")
+    if len(rankings) != len(weights):
+        raise ValueError("weights must contain one value per ranking collection")
+    if top_k <= 0 or rrf_k <= 0:
+        raise ValueError("top_k and rrf_k must be positive")
+    if any(weight < 0 for weight in weights) or not any(weights):
+        raise ValueError("weights must be non-negative and contain a positive value")
+
+    query_ids = list(rankings[0])
+    expected_query_ids = set(query_ids)
+    if any(set(ranking) != expected_query_ids for ranking in rankings[1:]):
+        raise ValueError("ranking collections must cover the same query IDs")
+
+    fused: dict[str, dict[str, float]] = {}
+    for query_id in query_ids:
+        scores: dict[str, float] = {}
+        tie_break: dict[str, tuple[int, int]] = {}
+        for source_index, (ranking, weight) in enumerate(zip(rankings, weights)):
+            if weight == 0:
+                continue
+            for rank, document_id in enumerate(ranking[query_id], start=1):
+                scores[document_id] = scores.get(document_id, 0.0) + float(weight) / (rrf_k + rank)
+                tie_break.setdefault(document_id, (source_index, rank))
+        ordered_ids = sorted(
+            scores,
+            key=lambda document_id: (-scores[document_id], tie_break[document_id]),
+        )[:top_k]
+        fused[query_id] = {document_id: scores[document_id] for document_id in ordered_ids}
+    return fused
 
 
 def experiment_identity(
@@ -606,6 +671,12 @@ def build_comparison_result(
             "batch_size": config.reranker_batch_size,
             "max_length": config.reranker_max_length,
             "device": choose_device(config) if config.reranker_device == "auto" else config.reranker_device,
+        },
+        "fusion": {
+            "method": "weighted_reciprocal_rank_fusion",
+            "rrf_k": config.rrf_k,
+            "weights": dict(zip(SYSTEM_IDS, config.fusion_weights)),
+            "candidate_depth": config.candidate_depth,
         },
         "seed": config.seed,
         "run_mode": config.run_mode,
@@ -883,12 +954,21 @@ def run_experiment(
         produce=lambda: reranker.rerank(hyde_representations, run_data.corpus, hyde_rankings),
     )
 
+    fusion_started = time.perf_counter()
+    fused_hyde_reranked = reciprocal_rank_fusion(
+        [original_rankings, hyde_rankings, original_reranked, hyde_reranked],
+        weights=config.fusion_weights,
+        top_k=config.candidate_depth,
+        rrf_k=config.rrf_k,
+    )
+    fusion_seconds = time.perf_counter() - fusion_started
+
     evaluation_started = time.perf_counter()
     metric_by_system: dict[str, Mapping[str, Any]] = {
         "e5": evaluate_ndcg_at_10(run_data.qrels, original_rankings, cutoff=10),
         "e5_hyde": evaluate_ndcg_at_10(run_data.qrels, hyde_rankings, cutoff=10),
         "e5_rerank": evaluate_ndcg_at_10(run_data.qrels, original_reranked, cutoff=10),
-        "e5_hyde_rerank": evaluate_ndcg_at_10(run_data.qrels, hyde_reranked, cutoff=10),
+        "e5_hyde_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_hyde_reranked, cutoff=10),
     }
     evaluation_seconds = time.perf_counter() - evaluation_started
     timings = {
@@ -900,6 +980,7 @@ def run_experiment(
         "hyde_ranking": hyde_ranking_seconds,
         "original_reranking": original_rerank_seconds,
         "hyde_reranking": hyde_rerank_seconds,
+        "rrf_fusion": fusion_seconds,
         "evaluation": evaluation_seconds,
     }
     result = build_comparison_result(
@@ -933,7 +1014,9 @@ def run_experiment(
 
 __all__ = [
     "CODE_VERSION",
+    "DEFAULT_FUSION_WEIGHTS",
     "DEFAULT_HYDE_PROMPT",
+    "DEFAULT_RRF_K",
     "ExperimentConfig",
     "ModelRevisions",
     "SYSTEM_IDS",
@@ -946,6 +1029,7 @@ __all__ = [
     "load_cosqa",
     "run_experiment",
     "rerank_candidate_rankings",
+    "reciprocal_rank_fusion",
     "select_run_data",
     "write_comparison_artifacts",
 ]

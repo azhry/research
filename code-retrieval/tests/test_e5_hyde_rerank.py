@@ -12,6 +12,7 @@ from e5_hyde_rerank import (
     combine_hypotheses,
     experiment_identity,
     rerank_candidate_rankings,
+    reciprocal_rank_fusion,
     write_comparison_artifacts,
 )
 
@@ -20,11 +21,13 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
     assert config.candidate_depth == 1000
-    assert CODE_VERSION == "e5-hyde-rerank-v5-paper-faiss-ranking"
+    assert CODE_VERSION == "e5-hyde-rerank-v6-batched-rrf-ensemble"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
     assert config.hyde_combination_strategy == "hypothesis_only"
     assert config.reranker_model_id == "cross-encoder/ms-marco-MiniLM-L6-v2"
+    assert config.rrf_k == 60
+    assert config.fusion_weights == (0.90, 0.05, 0.04, 0.01)
 
 
 def test_combine_hypotheses_rejects_empty_generation_and_preserves_strategy():
@@ -51,13 +54,33 @@ def test_reranker_reorders_without_changing_the_candidate_set():
         "d3": {"text": "third"},
     }
 
+    calls = []
+
     def deterministic_scores(pairs):
+        calls.append(len(pairs))
         return [len(passage) for _, passage in pairs]
 
     reranked = rerank_candidate_rankings(rankings, queries, corpus, deterministic_scores)
 
     assert list(reranked["q1"]) == ["d2", "d1", "d3"]
     assert set(reranked["q1"]) == set(rankings["q1"])
+    assert calls == [3]
+
+
+def test_reciprocal_rank_fusion_is_weighted_and_depth_limited():
+    original = {"q1": {"d1": 1.0, "d2": 0.9, "d3": 0.8}}
+    expanded = {"q1": {"d3": 1.0, "d4": 0.9, "d1": 0.8}}
+
+    fused = reciprocal_rank_fusion(
+        [original, expanded],
+        weights=(0.9, 0.1),
+        top_k=3,
+        rrf_k=60,
+    )
+
+    assert list(fused["q1"]) == ["d1", "d3", "d2"]
+    assert len(fused["q1"]) == 3
+    assert fused["q1"]["d1"] > fused["q1"]["d2"]
 
 
 def test_cache_metadata_and_identity_include_all_model_revisions(tmp_path):

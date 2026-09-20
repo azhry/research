@@ -46,8 +46,12 @@ HyDE + re-ranking. It uses the same CosQA data, paper-faithful E5
 qrels, and `nDCG@10` evaluator for every row. HyDE uses the local
 `google/flan-t5-base` generator, and the re-ranker uses
 `cross-encoder/ms-marco-MiniLM-L6-v2`; their resolved revisions and generation
-controls are recorded in the result metadata. The cross-encoder can only reorder
-the E5 candidate IDs. Smoke output is wiring evidence only.
+controls are recorded in the result metadata. The combined row uses a fixed,
+E5-anchored weighted reciprocal-rank fusion of the original E5, HyDE, and both
+cross-encoder rankings (`rrf_k=60`, weights `0.90/0.05/0.04/0.01`) and retains
+the top 1,000 fused candidates. Re-ranking is batched across the complete
+candidate collection so the full run does not change its candidate contract.
+Smoke output is wiring evidence only.
 
 ```bash
 E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --ExecutePreprocessor.timeout=0
