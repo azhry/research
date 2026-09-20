@@ -5,6 +5,8 @@ project's study-specific documents live under its own slug directory:
 
 - [Code Retrieval](code-retrieval/project.md) — COIR/CosQA study using E5, HyDE,
   and re-ranking.
+- [IFMS Maintenance Request](ifms-maintenance-request/project.md) — request,
+  SAP notification, SAP-information, and maintenance-order event flow.
 
 For a new study, add `.agents/knowledge/<project-slug>/project.md` and link it here.
 Do not treat another project's context as a default. Load only the selected
