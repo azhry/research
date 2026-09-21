@@ -30,13 +30,13 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-v5-keyword-rrf-concise-empty-policy"
+CODE_VERSION = "e5-hyde-v3-paper-faiss-empty-policy"
 DEFAULT_GENERATOR_REVISION = "7bcac572ce56db69c1ea7c8af255c5d7c9672fc2"
 DEFAULT_HYDE_PROMPT = (
-    "Rewrite this Python code-search request as a concise technical search document. "
-    "Include the most relevant Python functions, classes, modules, and implementation "
-    "terms. Do not write code, do not repeat words, and output only the search "
-    "document.\n\nRequest: {query}\n\nSearch document:"
+    "Write a concise hypothetical code-oriented answer for the following Python "
+    "code-search request. Describe the likely implementation or include a small "
+    "relevant code snippet. Output only the hypothetical answer, with no discussion "
+    "of this instruction.\n\nCode-search request:\n{query}\n\nHypothetical answer:"
 )
 
 
@@ -49,12 +49,10 @@ class HyDEConfig(BaselineConfig):
     prompt_template: str = DEFAULT_HYDE_PROMPT
     num_hypotheses: int = 1
     temperature: float = 0.0
-    max_new_tokens: int = 32
+    max_new_tokens: int = 128
     generation_batch_size: int = 8
     stop_behavior: str = "eos_or_pad"
     combination_strategy: str = "original_plus_hypothesis"
-    rrf_k: int = 5
-    rrf_hyde_weight: float = 0.5
     empty_hypothesis_behavior: str = "original_query_fallback"
     cache_dir: str = "artifacts/e5_hyde/cache"
     artifact_dir: str = "artifacts/e5_hyde"
@@ -75,17 +73,10 @@ class HyDEConfig(BaselineConfig):
             raise ValueError("generation_batch_size must be positive")
         if self.stop_behavior != "eos_or_pad":
             raise ValueError("stop_behavior must be eos_or_pad")
-        if self.combination_strategy not in {
-            "original_plus_hypothesis",
-            "original_hyde_rrf",
-        }:
+        if self.combination_strategy != "original_plus_hypothesis":
             raise ValueError(
-                "combination_strategy must be original_plus_hypothesis or original_hyde_rrf"
+                "combination_strategy must be original_plus_hypothesis"
             )
-        if self.rrf_k <= 0:
-            raise ValueError("rrf_k must be positive")
-        if self.rrf_hyde_weight < 0:
-            raise ValueError("rrf_hyde_weight must be non-negative")
         if self.empty_hypothesis_behavior not in {"error", "original_query_fallback"}:
             raise ValueError(
                 "empty_hypothesis_behavior must be error or original_query_fallback"
@@ -121,14 +112,6 @@ def hyde_cache_paths(config: HyDEConfig, identity: str) -> dict[str, Path]:
         "corpus_metadata": root / "corpus_embeddings.metadata.json",
         "query_embeddings": root / "query_embeddings.npy",
         "query_metadata": root / "query_embeddings.metadata.json",
-        "original_query_embeddings": root / "original_query_embeddings.npy",
-        "original_query_metadata": root / "original_query_embeddings.metadata.json",
-        "hypothesis_embeddings": root / "hypothesis_embeddings.npy",
-        "hypothesis_metadata": root / "hypothesis_embeddings.metadata.json",
-        "original_rankings": root / "original_rankings.json",
-        "original_rankings_metadata": root / "original_rankings.metadata.json",
-        "hypothesis_rankings": root / "hypothesis_rankings.json",
-        "hypothesis_rankings_metadata": root / "hypothesis_rankings.metadata.json",
         "rankings": root / "rankings.json",
         "rankings_metadata": root / "rankings.metadata.json",
     }
@@ -226,66 +209,6 @@ def build_expanded_queries(
         query_id: f"{str(queries[query_id]).strip()}\n\n{normalized_hypotheses[query_id]}"
         for query_id in queries
     }
-
-
-def _rank_positions(scores: Mapping[str, float]) -> dict[str, int]:
-    """Return zero-based ranks from a Faiss-ordered run mapping.
-
-    ``rank_with_faiss`` inserts documents in Faiss result order. Preserving
-    that order is important because CosQA contains tied/near-tied scores and
-    the benchmark evaluates the resulting order. Component ranking caches
-    therefore must be serialized without sorting their document keys.
-    """
-
-    return {
-        str(document_id): position
-        for position, document_id in enumerate(scores)
-    }
-
-
-def build_rrf_rankings(
-    original_rankings: Mapping[str, Mapping[str, float]],
-    hypothesis_rankings: Mapping[str, Mapping[str, float]],
-    *,
-    rrf_k: int = 5,
-    hyde_weight: float = 0.5,
-) -> dict[str, dict[str, float]]:
-    """Fuse original-query and HyDE rankings with weighted reciprocal rank.
-
-    Both inputs are expected to be the exact first-stage candidate runs at the
-    same depth. Ranks are zero-based so the tuned ``rrf_k`` is explicit and
-    stable across fresh and JSON-cached runs. The original ranking is always
-    retained; a zero HyDE weight therefore has a well-defined original-query
-    fallback.
-    """
-
-    if rrf_k <= 0:
-        raise ValueError("rrf_k must be positive")
-    if hyde_weight < 0:
-        raise ValueError("hyde_weight must be non-negative")
-    if list(original_rankings) != list(hypothesis_rankings):
-        raise ValueError("original and hypothesis rankings must have identical ordered query IDs")
-
-    fused: dict[str, dict[str, float]] = {}
-    for query_id in original_rankings:
-        original_positions = _rank_positions(original_rankings[query_id])
-        hypothesis_positions = _rank_positions(hypothesis_rankings[query_id])
-        documents = set(original_positions) | set(hypothesis_positions)
-        scores: dict[str, float] = {}
-        for document_id in documents:
-            original_score = (
-                1.0 / (rrf_k + original_positions[document_id])
-                if document_id in original_positions
-                else 0.0
-            )
-            hypothesis_score = (
-                hyde_weight / (rrf_k + hypothesis_positions[document_id])
-                if document_id in hypothesis_positions
-                else 0.0
-            )
-            scores[document_id] = original_score + hypothesis_score
-        fused[query_id] = scores
-    return fused
 
 
 class HyDEGenerator:
@@ -393,8 +316,6 @@ def build_hyde_result(
         "max_new_tokens": config.max_new_tokens,
         "stop_behavior": config.stop_behavior,
         "combination_strategy": config.combination_strategy,
-        "rrf_k": config.rrf_k,
-        "rrf_hyde_weight": config.rrf_hyde_weight,
         "empty_hypothesis_behavior": config.empty_hypothesis_behavior,
         "hypothesis_count": hypothesis_count,
     }
@@ -418,7 +339,6 @@ __all__ = [
     "HyDEConfig",
     "HyDEGenerator",
     "build_expanded_queries",
-    "build_rrf_rankings",
     "build_hyde_prompts",
     "build_hyde_result",
     "environment_metadata",

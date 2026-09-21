@@ -8,7 +8,6 @@ from e5_hyde import (
     DEFAULT_HYDE_PROMPT,
     HyDEConfig,
     build_expanded_queries,
-    build_rrf_rankings,
     build_hyde_prompts,
     build_hyde_result,
     expected_hyde_cache_metadata,
@@ -29,7 +28,7 @@ def test_config_records_explicit_hyde_controls():
     assert config.num_hypotheses == 1
     assert config.candidate_depth == 1000
     assert config.temperature == 0.0
-    assert config.max_new_tokens == 32
+    assert config.max_new_tokens == 128
     assert config.stop_behavior == "eos_or_pad"
     assert config.combination_strategy == "original_plus_hypothesis"
     assert config.empty_hypothesis_behavior == "original_query_fallback"
@@ -44,8 +43,6 @@ def test_config_records_explicit_hyde_controls():
         {"max_new_tokens": 0},
         {"stop_behavior": "custom"},
         {"combination_strategy": "hypothesis_only"},
-        {"rrf_k": 0},
-        {"rrf_hyde_weight": -0.1},
         {"empty_hypothesis_behavior": "ignore"},
     ],
 )
@@ -72,22 +69,6 @@ def test_expanded_query_plumbing_preserves_order_and_original_text():
     assert list(expanded) == ["q1", "q2"]
     assert expanded["q1"] == "find a parser\n\ndef parse(text): ..."
     assert expanded["q2"] == "sort a list\n\nsorted(values)"
-
-
-def test_rrf_fusion_preserves_original_candidates_and_weights_hyde():
-    fused = build_rrf_rankings(
-        {
-            "q1": {"d1": 0.9, "d2": 0.8},
-        },
-        {
-            "q1": {"d2": 0.9, "d3": 0.8},
-        },
-        rrf_k=5,
-        hyde_weight=0.5,
-    )
-
-    assert set(fused["q1"]) == {"d1", "d2", "d3"}
-    assert fused["q1"]["d2"] > fused["q1"]["d1"] > fused["q1"]["d3"]
 
 
 def test_hypotheses_must_match_query_ids_and_be_non_empty():
