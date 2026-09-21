@@ -1,6 +1,6 @@
 import json
 
-from e5_baseline import CosQAData, RunData
+from e5_baseline import CosQAData, RunData, save_json_cache
 from e5_hyde_rerank import (
     CODE_VERSION,
     ExperimentConfig,
@@ -21,7 +21,7 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
     assert config.candidate_depth == 1000
-    assert CODE_VERSION == "e5-hyde-rerank-v6-batched-rrf-ensemble"
+    assert CODE_VERSION == "e5-hyde-rerank-v7-cache-order-aware-rrf"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
     assert config.hyde_combination_strategy == "hypothesis_only"
@@ -81,6 +81,52 @@ def test_reciprocal_rank_fusion_is_weighted_and_depth_limited():
     assert list(fused["q1"]) == ["d1", "d3", "d2"]
     assert len(fused["q1"]) == 3
     assert fused["q1"]["d1"] > fused["q1"]["d2"]
+
+
+def test_reciprocal_rank_fusion_recovers_rank_from_cached_scores():
+    # JSON cache persistence sorts mapping keys, so iteration order is not
+    # retrieval order after a cache round-trip. Fusion must use the stored
+    # ranking scores instead of assuming dictionary insertion order.
+    cached_ranking = {"d1": 0.2, "d2": 0.9, "d3": 0.8}
+
+    fused = reciprocal_rank_fusion(
+        [{"q1": cached_ranking}],
+        weights=(1.0,),
+        top_k=3,
+        rrf_k=60,
+    )
+
+    assert list(fused["q1"]) == ["d2", "d3", "d1"]
+
+
+def test_reciprocal_rank_fusion_preserves_equal_score_source_order():
+    source_ranking = {"d2": 0.9, "d1": 0.9, "d3": 0.8}
+
+    fused = reciprocal_rank_fusion(
+        [{"q1": source_ranking}],
+        weights=(1.0,),
+        top_k=3,
+        rrf_k=60,
+    )
+
+    assert list(fused["q1"]) == ["d2", "d1", "d3"]
+
+
+def test_ranking_cache_round_trip_preserves_equal_score_order(tmp_path):
+    data_path = tmp_path / "rankings.json"
+    metadata_path = tmp_path / "rankings.metadata.json"
+    ranking = {"q1": {"d2": 0.9, "d1": 0.9, "d3": 0.8}}
+
+    save_json_cache(
+        data_path,
+        metadata_path,
+        ranking,
+        {"kind": "rankings"},
+        sort_keys=False,
+    )
+
+    persisted = json.loads(data_path.read_text(encoding="utf-8"))
+    assert list(persisted["q1"]) == ["d2", "d1", "d3"]
 
 
 def test_cache_metadata_and_identity_include_all_model_revisions(tmp_path):

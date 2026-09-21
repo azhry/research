@@ -39,7 +39,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v6-batched-rrf-ensemble"
+CODE_VERSION = "e5-hyde-rerank-v7-cache-order-aware-rrf"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_RRF_K = 60
 DEFAULT_FUSION_WEIGHTS = (0.90, 0.05, 0.04, 0.01)
@@ -446,7 +446,16 @@ def reciprocal_rank_fusion(
         for source_index, (ranking, weight) in enumerate(zip(rankings, weights)):
             if weight == 0:
                 continue
-            for rank, document_id in enumerate(ranking[query_id], start=1):
+            source_items = list(ranking[query_id].items())
+            if any(not np.isfinite(float(score)) for _, score in source_items):
+                raise ValueError("ranking scores must be finite")
+            # Cache JSON is serialized with sort_keys=True, so dictionary
+            # iteration order is not the retrieval order after a round-trip.
+            # Recover each source rank from its stored model score instead.
+            # Python's sort is stable, so equal-score ties retain the source
+            # order from Faiss (and from the order-preserving cache writer).
+            source_items.sort(key=lambda item: -float(item[1]))
+            for rank, (document_id, _) in enumerate(source_items, start=1):
                 scores[document_id] = scores.get(document_id, 0.0) + float(weight) / (rrf_k + rank)
                 tie_break.setdefault(document_id, (source_index, rank))
         ordered_ids = sorted(
@@ -798,7 +807,9 @@ def _json_or_cache(
     started = time.perf_counter()
     value = dict(produce())
     elapsed = time.perf_counter() - started
-    save_json_cache(path, metadata_path, value, metadata)
+    # Ranking dictionaries must retain Faiss/cross-encoder tie order across a
+    # JSON cache round-trip; sorted keys would silently change metric results.
+    save_json_cache(path, metadata_path, value, metadata, sort_keys=False)
     return value, elapsed
 
 
