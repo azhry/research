@@ -30,13 +30,13 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-v3-paper-faiss-empty-policy"
+CODE_VERSION = "e5-hyde-v6-keyword-concat-repeat-empty-policy"
 DEFAULT_GENERATOR_REVISION = "7bcac572ce56db69c1ea7c8af255c5d7c9672fc2"
 DEFAULT_HYDE_PROMPT = (
-    "Write a concise hypothetical code-oriented answer for the following Python "
-    "code-search request. Describe the likely implementation or include a small "
-    "relevant code snippet. Output only the hypothetical answer, with no discussion "
-    "of this instruction.\n\nCode-search request:\n{query}\n\nHypothetical answer:"
+    "Rewrite this Python code-search request as a concise technical search document. "
+    "Include the most relevant Python functions, classes, modules, and implementation "
+    "terms. Do not write code, do not repeat words, and output only the search "
+    "document.\n\nRequest: {query}\n\nSearch document:"
 )
 
 
@@ -49,10 +49,11 @@ class HyDEConfig(BaselineConfig):
     prompt_template: str = DEFAULT_HYDE_PROMPT
     num_hypotheses: int = 1
     temperature: float = 0.0
-    max_new_tokens: int = 128
+    max_new_tokens: int = 32
     generation_batch_size: int = 8
     stop_behavior: str = "eos_or_pad"
     combination_strategy: str = "original_plus_hypothesis"
+    hypothesis_repetitions: int = 2
     empty_hypothesis_behavior: str = "original_query_fallback"
     cache_dir: str = "artifacts/e5_hyde/cache"
     artifact_dir: str = "artifacts/e5_hyde"
@@ -77,6 +78,8 @@ class HyDEConfig(BaselineConfig):
             raise ValueError(
                 "combination_strategy must be original_plus_hypothesis"
             )
+        if self.hypothesis_repetitions <= 0:
+            raise ValueError("hypothesis_repetitions must be positive")
         if self.empty_hypothesis_behavior not in {"error", "original_query_fallback"}:
             raise ValueError(
                 "empty_hypothesis_behavior must be error or original_query_fallback"
@@ -199,14 +202,20 @@ def build_expanded_queries(
     hypotheses: Mapping[str, str],
     *,
     strategy: str = "original_plus_hypothesis",
+    hypothesis_repetitions: int = 1,
 ) -> dict[str, str]:
     """Combine original queries and generated text without changing IDs."""
 
     if strategy != "original_plus_hypothesis":
         raise ValueError("strategy must be original_plus_hypothesis")
+    if hypothesis_repetitions <= 0:
+        raise ValueError("hypothesis_repetitions must be positive")
     normalized_hypotheses = validate_hypotheses(queries, hypotheses)
     return {
-        query_id: f"{str(queries[query_id]).strip()}\n\n{normalized_hypotheses[query_id]}"
+        query_id: " ".join(
+            [str(queries[query_id]).strip()]
+            + [normalized_hypotheses[query_id]] * hypothesis_repetitions
+        )
         for query_id in queries
     }
 
@@ -316,6 +325,7 @@ def build_hyde_result(
         "max_new_tokens": config.max_new_tokens,
         "stop_behavior": config.stop_behavior,
         "combination_strategy": config.combination_strategy,
+        "hypothesis_repetitions": config.hypothesis_repetitions,
         "empty_hypothesis_behavior": config.empty_hypothesis_behavior,
         "hypothesis_count": hypothesis_count,
     }
