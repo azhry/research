@@ -1,6 +1,6 @@
 import json
 
-from e5_baseline import CosQAData, RunData, save_json_cache
+from e5_baseline import CosQAData, RunData, load_valid_json_cache, save_json_cache
 from e5_hyde_rerank import (
     CODE_VERSION,
     ExperimentConfig,
@@ -28,6 +28,8 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     assert config.reranker_model_id == "cross-encoder/ms-marco-MiniLM-L6-v2"
     assert config.rrf_k == 60
     assert config.fusion_weights == (0.90, 0.05, 0.04, 0.01)
+    assert isinstance(config.as_dict()["hyde_fallback_prompts"], list)
+    assert isinstance(config.as_dict()["fusion_weights"], list)
 
 
 def test_combine_hypotheses_rejects_empty_generation_and_preserves_strategy():
@@ -127,6 +129,25 @@ def test_ranking_cache_round_trip_preserves_equal_score_order(tmp_path):
 
     persisted = json.loads(data_path.read_text(encoding="utf-8"))
     assert list(persisted["q1"]) == ["d2", "d1", "d3"]
+
+
+def test_experiment_cache_metadata_round_trip_accepts_tuple_controls(tmp_path):
+    config = ExperimentConfig(cache_dir=str(tmp_path))
+    revisions = ModelRevisions("e5", "hyde", "reranker")
+    metadata = cache_metadata(
+        config,
+        revisions,
+        identity="identity",
+        kind="rankings",
+        ids=["q1", "d1"],
+    )
+    data_path = tmp_path / "value.json"
+    metadata_path = tmp_path / "value.metadata.json"
+    save_json_cache(data_path, metadata_path, {"q1": {"d1": 1.0}}, metadata)
+
+    assert load_valid_json_cache(data_path, metadata_path, metadata) == {
+        "q1": {"d1": 1.0}
+    }
 
 
 def test_cache_metadata_and_identity_include_all_model_revisions(tmp_path):

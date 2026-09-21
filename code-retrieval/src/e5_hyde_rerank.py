@@ -12,7 +12,7 @@ import csv
 import hashlib
 import json
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -79,6 +79,14 @@ class ExperimentConfig(BaselineConfig):
     reranker_device: str = "auto"
     rrf_k: int = DEFAULT_RRF_K
     fusion_weights: tuple[float, ...] = DEFAULT_FUSION_WEIGHTS
+
+    def as_dict(self) -> dict[str, Any]:
+        """Return cache metadata that is stable across JSON round-trips."""
+
+        values = asdict(self)
+        values["hyde_fallback_prompts"] = list(self.hyde_fallback_prompts)
+        values["fusion_weights"] = list(self.fusion_weights)
+        return values
 
     def __post_init__(self) -> None:
         super().__post_init__()

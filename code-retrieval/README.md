@@ -42,16 +42,18 @@ ignored by Git.
 `notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
 comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
 HyDE + re-ranking. It uses the same CosQA data, paper-faithful E5
-`IndexFlatIP` first-stage retrieval at candidate depth 1,000,
+`IndexFlatIP` first-stage retrieval at candidate depth 1,000 by default,
 qrels, and `nDCG@10` evaluator for every row. HyDE uses the local
 `google/flan-t5-base` generator, and the re-ranker uses
 `cross-encoder/ms-marco-MiniLM-L6-v2`; their resolved revisions and generation
 controls are recorded in the result metadata. The combined row uses a fixed,
 E5-anchored weighted reciprocal-rank fusion of the original E5, HyDE, and both
 cross-encoder rankings (`rrf_k=60`, weights `0.90/0.05/0.04/0.01`) and retains
-the top 1,000 fused candidates. Re-ranking is batched across the complete
+the configured fused depth. Re-ranking is batched across the complete
 candidate collection so the full run does not change its candidate contract.
-Smoke output is wiring evidence only.
+Smoke output is wiring evidence only. Set
+`E5_HYDE_RERANK_CANDIDATE_DEPTH=10` when comparing directly with the saved
+E5 full-baseline artifact, which used candidate depth 10.
 
 ```bash
 E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --ExecutePreprocessor.timeout=0
