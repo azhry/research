@@ -44,6 +44,7 @@ DEFAULT_HYDE_PROMPT = (
 class HyDEConfig(BaselineConfig):
     """Explicit controls for one E5 + HyDE execution."""
 
+    batch_size: int = 128
     generator_id: str = "google/flan-t5-base"
     generator_revision: str = DEFAULT_GENERATOR_REVISION
     prompt_template: str = DEFAULT_HYDE_PROMPT

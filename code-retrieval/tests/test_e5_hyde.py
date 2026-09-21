@@ -23,6 +23,7 @@ def test_config_records_explicit_hyde_controls():
     config = HyDEConfig()
 
     assert config.generator_id == "google/flan-t5-base"
+    assert config.batch_size == 128
     assert config.generator_revision == DEFAULT_GENERATOR_REVISION
     assert config.prompt_template == DEFAULT_HYDE_PROMPT
     assert config.num_hypotheses == 1
