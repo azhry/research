@@ -516,11 +516,20 @@ class E5Encoder:
 
         self.config = config
         self.device = choose_device(config)
-        self.model = SentenceTransformer(
-            config.model_id,
-            revision=config.model_revision,
-            device=self.device,
-        )
+        model_source = os.environ.get("E5_MODEL_LOCAL_PATH")
+        if model_source:
+            model_source_path = Path(model_source).expanduser()
+            if not model_source_path.is_dir():
+                raise ValueError(
+                    "E5_MODEL_LOCAL_PATH must point to an existing model directory"
+                )
+            self.model = SentenceTransformer(str(model_source_path), device=self.device)
+        else:
+            self.model = SentenceTransformer(
+                config.model_id,
+                revision=config.model_revision,
+                device=self.device,
+            )
         self.model.max_seq_length = config.max_seq_length
 
     def _encode(self, texts: Sequence[str]) -> np.ndarray:
