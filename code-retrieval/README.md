@@ -17,6 +17,11 @@ Transformers 4.38.1; every actual run records its installed versions in
 `metadata.json` so a newer local runtime is not mistaken for an exact
 environment reproduction.
 
+The baseline retrieval follows the paper-faithful exact Faiss `IndexFlatIP`
+path over normalized E5 embeddings with a 1,000-document candidate depth. The
+actual runtime and package versions are persisted with each result; smoke runs
+are wiring evidence only and are not comparable benchmark results.
+
 Install the declared dependencies before opening the notebook:
 
 ```bash
@@ -74,3 +79,34 @@ full-run output is written below `code-retrieval/artifacts/e5_rerank/`, which is
 ignored by Git. Benchmark evidence is valid only when the notebook uses the
 complete declared query and corpus populations with real E5 and cross-encoder
 inference.
+
+## E5 + HyDE
+
+`notebooks/e5_hyde_experiment.ipynb` adds one real, deterministic HyDE
+hypothesis from `google/flan-t5-base` to each original CosQA test query, then
+uses the same paper-faithful E5 first stage, full corpus, 1,000-document
+candidate depth, qrels, and COIR evaluator as the baseline. The generator
+revision, prompt, generation settings, expanded-query strategy, empty-output
+policy, and separate cache identity are persisted with the result. If the
+generator emits only special tokens, the declared `original_query_fallback`
+policy keeps that query's representation equal to the original query; it does
+not invent a hypothesis or use evaluation data. HyDE does not receive answers,
+qrels, labels, or target documents.
+
+The smoke notebook run is wiring evidence only:
+
+```bash
+cd code-retrieval
+E5_HYDE_MODE=smoke python -m nbconvert --to notebook --execute notebooks/e5_hyde_experiment.ipynb --output e5_hyde_smoke.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+Run the complete declared benchmark only when model and dataset downloads and
+available memory are sufficient:
+
+```bash
+cd code-retrieval
+E5_HYDE_MODE=benchmark E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute notebooks/e5_hyde_experiment.ipynb --output e5_hyde_full.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+HyDE output is written below `code-retrieval/artifacts/e5_hyde/`; generated
+notebooks, caches, results, and metadata are ignored by Git.
