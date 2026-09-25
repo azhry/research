@@ -8,3 +8,4 @@ pytest>=8.0
 sentence-transformers>=3.0,<6
 transformers>=4.41,<5
 torch>=2.0
+transformers>=4.40,<5
