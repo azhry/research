@@ -6,9 +6,9 @@ the CosQA E5-base-v2 baseline. The full-dataset entry point is
 and refuses to write a result if a subset is selected. Both notebooks load the
 pinned Hugging Face dataset revision, use text-only `query: ` / `passage: `
 inputs, and evaluate with the COIR evaluator at `nDCG@10`.
-The baseline retrieval uses the paper's exact Faiss `IndexFlat` inner-product
-path with a 1000-document candidate depth; the primary reported metric remains
-`nDCG@10`.
+The baseline uses the paper-faithful exact Faiss `IndexFlatIP` inner-product
+path over normalized E5 embeddings with a 1,000-document first-stage candidate
+depth; the primary reported metric remains `nDCG@10`.
 
 The paper-compatible controls are E5-base-v2, 512-token inputs, mean-pooled
 embeddings, cosine/inner-product ranking, Faiss `IndexFlat`, and a 1,000-result
@@ -50,6 +50,29 @@ same command. Smoke output is written below
 `code-retrieval/artifacts/e5_baseline/`; full-run
 output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
 ignored by Git.
+
+`notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
+comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
+HyDE + re-ranking. It uses the same CosQA data, paper-faithful E5
+`IndexFlatIP` first-stage retrieval at candidate depth 1,000 by default,
+qrels, and `nDCG@10` evaluator for every row. HyDE uses the local
+`google/flan-t5-base` generator, and the re-ranker uses
+`cross-encoder/ms-marco-MiniLM-L6-v2`; their resolved revisions and generation
+controls are recorded in the result metadata. The combined row uses a fixed,
+E5-anchored weighted reciprocal-rank fusion of the original E5, HyDE, and both
+cross-encoder rankings (`rrf_k=60`, weights `0.90/0.05/0.04/0.01`) and retains
+the configured fused depth. Re-ranking is batched across the complete
+candidate collection so the full run does not change its candidate contract.
+Smoke output is wiring evidence only. Set
+`E5_HYDE_RERANK_CANDIDATE_DEPTH=10` when comparing directly with the saved
+E5 full-baseline artifact, which used candidate depth 10.
+
+```bash
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --ExecutePreprocessor.timeout=0
+```
+
+Comparison output is written below `code-retrieval/artifacts/e5_hyde_rerank/`;
+the directory is ignored by Git.
 
 ## E5 + rerank
 

@@ -4,6 +4,7 @@ import numpy as np
 
 from e5_baseline import (
     BaselineConfig,
+    CODE_VERSION,
     expected_cache_metadata,
     load_valid_embedding_cache,
     normalize_cosqa_records,
@@ -12,6 +13,11 @@ from e5_baseline import (
     save_embedding_cache,
     select_run_data,
 )
+
+
+def test_baseline_uses_paper_faiss_candidate_contract():
+    assert BaselineConfig().candidate_depth == 1000
+    assert CODE_VERSION == "e5-baseline-v3-paper-faiss-ranking"
 
 
 def test_normalize_cosqa_filters_queries_to_qrels_and_preserves_text_only_contract():
