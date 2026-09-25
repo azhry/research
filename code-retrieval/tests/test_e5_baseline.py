@@ -85,12 +85,23 @@ def test_config_rejects_unknown_run_mode():
         raise AssertionError("invalid run mode was accepted")
 
 
-def test_faiss_ranking_uses_configured_candidate_depth():
+def test_faiss_ranking_uses_configured_candidate_depth_and_preserves_corpus_contract():
     corpus_ids = ["d1", "d2", "d3"]
     rankings = rank_with_faiss(
-        np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32),
         np.asarray(
-            [[1.0, 0.0], [0.0, 1.0], [0.7, 0.7]], dtype=np.float32
+            [
+                [1.0, 0.0],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
+        ),
+        np.asarray(
+            [
+                [1.0, 0.0],
+                [0.9, 0.1],
+                [0.0, 1.0],
+            ],
+            dtype=np.float32,
         ),
         ["q1", "q2"],
         corpus_ids,
