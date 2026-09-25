@@ -422,10 +422,14 @@ def expected_cache_metadata(
     }
 
 
-def _atomic_write_json(path: Path, value: Mapping[str, Any]) -> None:
+def _atomic_write_json(
+    path: Path, value: Mapping[str, Any], *, sort_keys: bool = True
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    temporary.write_text(json.dumps(value, indent=2, sort_keys=True), encoding="utf-8")
+    temporary.write_text(
+        json.dumps(value, indent=2, sort_keys=sort_keys), encoding="utf-8"
+    )
     temporary.replace(path)
 
 
@@ -503,9 +507,11 @@ def save_json_cache(
     metadata_path: Path,
     value: Mapping[str, Any],
     metadata: Mapping[str, Any],
+    *,
+    sort_keys: bool = True,
 ) -> None:
-    _atomic_write_json(data_path, dict(value))
-    _atomic_write_json(metadata_path, dict(metadata))
+    _atomic_write_json(data_path, dict(value), sort_keys=sort_keys)
+    _atomic_write_json(metadata_path, dict(metadata), sort_keys=sort_keys)
 
 
 class E5Encoder:
@@ -558,7 +564,7 @@ def rank_with_faiss(
     """Exact inner-product search using the paper's Faiss IndexFlat path.
 
     The paper reports Faiss ``IndexFlat`` retrieval and evaluates the first
-    1000 retrieved candidates.  Keeping this as a direct Faiss call matters on
+    1000 retrieved candidates. Keeping this as a direct Faiss call matters on
     CosQA: asking Faiss for only the final metric cutoff can select a different
     tied-document order than asking for the benchmark candidate depth first.
     """
