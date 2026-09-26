@@ -172,3 +172,45 @@ system while RRF turns those same ranks into unique scores in another.
 Keep the project's `.venv` active for the selector, ranking verifier, and test
 assembler as well; each script rejects a Python or dependency version that
 does not match the pinned runtime.
+
+## Run logs and analysis traces
+
+`scripts/run_benchmark_notebook.py` preserves one directory per notebook
+execution below the selected `--output-dir`:
+
+```text
+<output-dir>/runs/<UTC timestamp and run id>/
+  <notebook>.ipynb             executed notebook with captured cell outputs
+  execution.log                runner output and readable notebook cell outputs
+  execution_trace.jsonl        notebook start/end and timed cell lifecycle events
+  execution.json               run controls, result identity, checks, and artifact paths
+  analysis/
+    analysis_metadata.json
+    per_query_metrics.csv      one nDCG@10/delta row per query and system
+    qualitative_cases.jsonl    original query, HyDE text, top-10 docs/scores/qrels
+```
+
+The JSONL trace records each code cell's section, source hash, start/end time,
+elapsed time, status, and textual output or exception. The execution metadata
+links the exact notebook hash, commit, pinned runtime, benchmark result/cache
+identity, selected fusion settings, exit codes, and analysis files. The runner
+keeps the original notebook unchanged and removes its temporary trace bootstrap
+from the saved executed copy. Failed runs keep their log, trace, and executed
+notebook when available, and return a non-zero exit status.
+
+Analysis exports require complete benchmark evidence. They are generated from
+the saved ordered rankings and the same pinned CosQA qrels. Per-query nDCG@10 is
+computed with standard graded-relevance gains and checked against each official
+aggregate within `1e-5`; a mismatch stops the export. Qualitative cases include
+the query, optional generated HyDE hypothesis, each available system's top 10
+documents, score, qrels relevance, title/language, and a 400-character text
+preview. These files are local research artifacts under the selected output
+directory and are not added to Git.
+
+Each invocation creates a new run directory, so logs and analysis evidence are
+preserved even when the notebook's convenience `result.json` is updated. A full
+benchmark runner invocation also checks baseline parity for the full E5
+notebook and the issue's requested score comparisons; failed checks are recorded
+in `execution.json` and return non-zero. The published CoIR E5-base/CosQA value
+of `0.3259` is recorded as an external paper reference, with its protocol
+limitations, not as a same-run parity artifact.
