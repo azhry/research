@@ -45,7 +45,7 @@ def test_rerank_orders_descending_scores_with_deterministic_id_ties():
 
     reranked = rerank_rankings(first_stage, reranker_scores)
 
-    assert list(reranked["q1"]) == ["d2", "d3", "d1"]
+    assert list(reranked["q1"]) == ["d3", "d2", "d1"]
     assert candidate_pool_preserved(first_stage, reranked)
 
 
@@ -79,7 +79,7 @@ def test_rerank_cache_identity_includes_reranker_controls(tmp_path):
 
     changed = RerankConfig(cache_dir=str(tmp_path), reranker_batch_size=64)
 
-    assert metadata["code_version"] == "e5-rerank-v2-paper-faiss-ranking"
+    assert metadata["code_version"] == "e5-rerank-v6-validation-selected-e5-fusion-stable-ties"
     assert rerank_run_identity(changed) != identity
     assert metadata["config"]["reranker_revision"] == config.reranker_revision
 
@@ -100,6 +100,7 @@ def test_comparison_result_contains_both_measured_systems_and_delta():
         RunData(data.corpus, data.queries, data.qrels),
         metric,
         reranked_metric,
+        raw_reranked_metric={"ndcg_at_10": 0.4},
         identity="identity",
         environment={"device": "cpu"},
         timings={"reranking": 1.0},
@@ -111,3 +112,5 @@ def test_comparison_result_contains_both_measured_systems_and_delta():
     assert result["systems"]["e5"]["metric"] == "nDCG@10"
     assert result["systems"]["e5_rerank"]["candidate_pool_preserved"] is True
     assert result["delta_ndcg_at_10"] == pytest.approx(0.25)
+    assert result["fusion"]["selection_qrels_split"] == "valid"
+    assert result["component_diagnostics"]["e5_rerank_raw"]["ndcg_at_10"] == 0.4

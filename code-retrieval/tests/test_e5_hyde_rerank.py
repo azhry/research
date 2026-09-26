@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 from e5_baseline import CosQAData, RunData, load_valid_json_cache, save_json_cache
 from e5_hyde_rerank import (
@@ -9,6 +10,7 @@ from e5_hyde_rerank import (
     blocked_result,
     build_comparison_result,
     cache_metadata,
+    candidate_contract,
     combine_hypotheses,
     experiment_identity,
     rerank_candidate_rankings,
@@ -21,15 +23,17 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
     assert config.candidate_depth == 1000
-    assert CODE_VERSION == "e5-hyde-rerank-v7-cache-order-aware-rrf"
+    assert CODE_VERSION == "e5-hyde-rerank-v13-auditable-component-rrf"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
-    assert config.hyde_combination_strategy == "hypothesis_only"
+    assert config.hyde_combination_strategy == "query_plus_hypotheses"
     assert config.reranker_model_id == "cross-encoder/ms-marco-MiniLM-L6-v2"
     assert config.rrf_k == 60
-    assert config.fusion_weights == (0.90, 0.05, 0.04, 0.01)
+    assert config.hyde_fusion_weights == (0.65, 0.35)
+    assert config.reranker_fusion_weights == (0.8, 0.2)
+    assert config.combined_fusion_weights == (0.75, 0.25)
     assert isinstance(config.as_dict()["hyde_fallback_prompts"], list)
-    assert isinstance(config.as_dict()["fusion_weights"], list)
+    assert isinstance(config.as_dict()["hyde_fusion_weights"], list)
 
 
 def test_combine_hypotheses_rejects_empty_generation_and_preserves_strategy():
@@ -86,9 +90,8 @@ def test_reciprocal_rank_fusion_is_weighted_and_depth_limited():
 
 
 def test_reciprocal_rank_fusion_recovers_rank_from_cached_scores():
-    # JSON cache persistence sorts mapping keys, so iteration order is not
-    # retrieval order after a cache round-trip. Fusion must use the stored
-    # ranking scores instead of assuming dictionary insertion order.
+    # Ranking caches preserve insertion order, while scores recover rank
+    # order when a source returns scores that are not monotone by insertion.
     cached_ranking = {"d1": 0.2, "d2": 0.9, "d3": 0.8}
 
     fused = reciprocal_rank_fusion(
@@ -112,6 +115,15 @@ def test_reciprocal_rank_fusion_preserves_equal_score_source_order():
     )
 
     assert list(fused["q1"]) == ["d2", "d1", "d3"]
+
+
+def test_candidate_contract_records_ordered_ids_and_population():
+    contract = candidate_contract({"q1": {"d2": 0.9, "d1": 0.8}})
+
+    assert contract["query_count"] == 1
+    assert contract["minimum_candidates_per_query"] == 2
+    assert contract["maximum_candidates_per_query"] == 2
+    assert len(contract["ordered_candidate_ids_sha256"]) == 64
 
 
 def test_ranking_cache_round_trip_preserves_equal_score_order(tmp_path):
@@ -190,6 +202,8 @@ def test_comparison_result_contains_four_rows_and_deltas():
         "e5_hyde": {"ndcg_at_10": 0.6},
         "e5_rerank": {"ndcg_at_10": 0.55},
         "e5_hyde_rerank": {"ndcg_at_10": 0.7},
+        "e5_hyde_raw": {"ndcg_at_10": 0.3},
+        "e5_rerank_raw": {"ndcg_at_10": 0.4},
     }
     result = build_comparison_result(
         config,
@@ -211,6 +225,9 @@ def test_comparison_result_contains_four_rows_and_deltas():
     assert result["exclusions"] == []
     assert result["limitations"][0]["type"] == "evidence_level"
     assert result["artifact_provenance"]["synthetic_scores"] is False
+    assert result["fusion"]["selection_qrels_split"] == "valid"
+    assert result["component_diagnostics"]["e5_hyde_raw"]["ndcg_at_10"] == 0.3
+    assert result["component_diagnostics"]["e5_rerank_raw"]["ndcg_at_10"] == 0.4
 
 
 def test_blocked_result_has_null_scores_and_explicit_blocker():
@@ -235,7 +252,12 @@ def test_write_comparison_artifacts_writes_json_csv_and_metadata(tmp_path):
     persisted = json.loads((tmp_path / "result.json").read_text(encoding="utf-8"))
     metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     csv_text = (tmp_path / "comparison.csv").read_text(encoding="utf-8")
-    assert set(paths) == {"result", "comparison", "metadata"}
+    assert set(paths) == {
+        "result", "comparison", "metadata", "run_result", "run_comparison", "run_metadata"
+    }
+    assert Path(paths["run_result"]).is_file()
+    assert Path(paths["run_comparison"]).is_file()
+    assert Path(paths["run_metadata"]).is_file()
     assert persisted["system_ids"] == SYSTEM_IDS
     assert metadata["result"]["status"] == "blocked"
     assert "system_id,ndcg_at_10,delta_vs_e5" in csv_text
