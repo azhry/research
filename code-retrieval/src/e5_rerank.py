@@ -37,7 +37,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-rerank-v2-paper-faiss-ranking"
+CODE_VERSION = "e5-rerank-v6-validation-selected-e5-fusion-stable-ties"
 DEFAULT_RERANKER_ID = "cross-encoder/ms-marco-MiniLM-L6-v2"
 DEFAULT_RERANKER_REVISION = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
 
@@ -49,8 +49,10 @@ class RerankConfig(BaselineConfig):
     reranker_id: str = DEFAULT_RERANKER_ID
     reranker_revision: str = DEFAULT_RERANKER_REVISION
     reranker_max_seq_length: int = 512
-    reranker_batch_size: int = 32
+    reranker_batch_size: int = 128
     candidate_depth: int = 1000
+    rrf_k: int = 60
+    fusion_weights: tuple[float, float] = (0.8, 0.2)
     cache_dir: str = "artifacts/e5_rerank/cache"
     artifact_dir: str = "artifacts/e5_rerank"
 
@@ -60,20 +62,39 @@ class RerankConfig(BaselineConfig):
             raise ValueError(
                 "reranker_max_seq_length and reranker_batch_size must be positive"
             )
+        if self.rrf_k <= 0:
+            raise ValueError("rrf_k must be positive")
+        if (
+            len(self.fusion_weights) != 2
+            or any(weight < 0 for weight in self.fusion_weights)
+            or not any(self.fusion_weights)
+        ):
+            raise ValueError("fusion_weights must contain two non-negative values, one positive")
 
     def as_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        values = asdict(self)
+        values["fusion_weights"] = list(self.fusion_weights)
+        return values
 
 
 def rerank_run_identity(
-    config: RerankConfig, *, repo_root: Path | None = None
+    config: RerankConfig,
+    *,
+    repo_root: Path | None = None,
+    notebook_sha256: str | None = None,
+    environment: Mapping[str, Any] | None = None,
 ) -> str:
     """Return an identity that includes every first- and second-stage control."""
 
+    execution_environment = dict(
+        environment or environment_metadata(config, repo_root=repo_root)
+    )
     payload = {
         "code_version": CODE_VERSION,
         "config": config.as_dict(),
         "git_commit": git_commit(repo_root),
+        "notebook_sha256": notebook_sha256,
+        "execution_environment": execution_environment,
     }
     return sha256_text(canonical_json(payload))[:16]
 
@@ -90,6 +111,8 @@ def rerank_cache_paths(config: RerankConfig, identity: str) -> dict[str, Path]:
         "rankings_metadata": root / "rankings.metadata.json",
         "reranked_rankings": root / "reranked_rankings.json",
         "reranked_rankings_metadata": root / "reranked_rankings.metadata.json",
+        "fused_rankings": root / "fused_rankings.json",
+        "fused_rankings_metadata": root / "fused_rankings.metadata.json",
     }
 
 
@@ -100,13 +123,20 @@ def expected_rerank_cache_metadata(
     kind: str,
     ids: Sequence[str],
     repo_root: Path | None = None,
+    notebook_sha256: str | None = None,
+    environment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    execution_environment = dict(
+        environment or environment_metadata(config, repo_root=repo_root)
+    )
     return {
         "cache_format": 1,
         "kind": kind,
         "identity": identity,
         "code_version": CODE_VERSION,
         "git_commit": git_commit(repo_root),
+        "notebook_sha256": notebook_sha256,
+        "execution_environment": execution_environment,
         "config": config.as_dict(),
         "ids_sha256": sha256_ids(ids),
         "count": len(ids),
@@ -196,9 +226,15 @@ def rerank_rankings(
         for corpus_id, value in scores.items():
             if not np.isfinite(float(value)):
                 raise ValueError("reranker scores must be finite")
+        first_stage_order = {
+            corpus_id: index for index, corpus_id in enumerate(first_stage_scores)
+        }
         ordered_ids = sorted(
             scores,
-            key=lambda corpus_id: (-float(scores[corpus_id]), str(corpus_id)),
+            key=lambda corpus_id: (
+                -float(scores[corpus_id]),
+                first_stage_order[corpus_id],
+            ),
         )
         reranked[query_id] = {
             corpus_id: float(scores[corpus_id]) for corpus_id in ordered_ids
@@ -313,6 +349,7 @@ def build_comparison_result(
     baseline_metric: Mapping[str, Any],
     reranked_metric: Mapping[str, Any],
     *,
+    raw_reranked_metric: Mapping[str, Any] | None = None,
     identity: str,
     environment: Mapping[str, Any],
     timings: Mapping[str, float],
@@ -346,6 +383,27 @@ def build_comparison_result(
         "benchmark_evidence": status == "benchmark",
         "systems": {"e5": baseline, "e5_rerank": reranked},
         "delta_ndcg_at_10": reranked["ndcg_at_10"] - baseline["ndcg_at_10"],
+        "fusion": {
+            "method": "weighted_reciprocal_rank_fusion",
+            "sources": ["e5", "e5_rerank_raw"],
+            "weights": list(config.fusion_weights),
+            "rrf_k": config.rrf_k,
+            "candidate_depth": config.candidate_depth,
+            "selection_qrels_split": "valid",
+            "selection_metric": "nDCG@10",
+        },
+        "component_diagnostics": (
+            {
+                "e5_rerank_raw": {
+                    "ndcg_at_10": float(raw_reranked_metric["ndcg_at_10"]),
+                    "delta_vs_e5": float(raw_reranked_metric["ndcg_at_10"])
+                    - float(baseline_metric["ndcg_at_10"]),
+                    "ranking_method": "unfused_cross_encoder_ranking",
+                }
+            }
+            if raw_reranked_metric is not None
+            else {}
+        ),
         "candidate_pool": {
             "depth": config.candidate_depth,
             "preserved": candidate_pool_was_preserved,

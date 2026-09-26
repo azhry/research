@@ -23,7 +23,10 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 import numpy as np
 
 
-CODE_VERSION = "e5-baseline-v3-paper-faiss-ranking"
+CODE_VERSION = "e5-baseline-v5-runtime-and-notebook-cache-identity"
+RANKING_ORDER_POLICY = (
+    "descending_score_then_saved_insertion_order_with_unique_ordinal_evaluation_scores"
+)
 DEFAULT_DATASET_REVISION = "0846fa3b963a21bead36e9fab61451fc83b777a6"
 DEFAULT_MODEL_REVISION = "f52bf8ec8c7124536f0efb74aca902b2995e5bcd"
 
@@ -45,11 +48,11 @@ class BaselineConfig:
     query_prefix: str = "query: "
     passage_prefix: str = "passage: "
     max_seq_length: int = 512
-    batch_size: int = 32
+    batch_size: int = 128
     candidate_depth: int = 1000
     normalize_embeddings: bool = True
     seed: int = 42
-    device: str = "auto"
+    device: str = "cpu"
     run_mode: str = "smoke"
     smoke_queries: int = 8
     smoke_corpus: int = 256
@@ -124,7 +127,7 @@ def git_commit(repo_root: Path | None = None) -> str | None:
 
 
 def set_seed(seed: int) -> None:
-    """Set the seeds used by the local Python/NumPy/Torch execution."""
+    """Seed inference and request deterministic PyTorch kernels."""
 
     random.seed(seed)
     np.random.seed(seed)
@@ -132,8 +135,17 @@ def set_seed(seed: int) -> None:
         import torch
 
         torch.manual_seed(seed)
+        torch.set_default_dtype(torch.float32)
         if torch.cuda.is_available():
             torch.cuda.manual_seed_all(seed)
+        torch.use_deterministic_algorithms(True)
+        torch.set_float32_matmul_precision("highest")
+        if hasattr(torch.backends, "cudnn"):
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+            torch.backends.cudnn.allow_tf32 = False
+        if hasattr(torch.backends, "cuda"):
+            torch.backends.cuda.matmul.allow_tf32 = False
     except ImportError:
         pass
 
@@ -172,6 +184,9 @@ def environment_metadata(config: BaselineConfig, repo_root: Path | None = None) 
                 "coir-eval",
                 "datasets",
                 "faiss-cpu",
+                "ipykernel",
+                "jupyter",
+                "nbconvert",
                 "numpy",
                 "pytrec-eval-terrier",
                 "sentence-transformers",
@@ -185,7 +200,15 @@ def environment_metadata(config: BaselineConfig, repo_root: Path | None = None) 
         import torch
 
         metadata["torch_version"] = torch.__version__
+        metadata["torch_default_dtype"] = str(torch.get_default_dtype())
         metadata["torch_num_threads"] = int(torch.get_num_threads())
+        metadata["torch_deterministic_algorithms"] = bool(
+            torch.are_deterministic_algorithms_enabled()
+        )
+        metadata["torch_float32_matmul_precision"] = torch.get_float32_matmul_precision()
+        metadata["torch_cuda_matmul_allow_tf32"] = bool(
+            getattr(torch.backends.cuda.matmul, "allow_tf32", False)
+        )
         metadata["cuda_available"] = bool(torch.cuda.is_available())
         metadata["cuda_device_count"] = int(torch.cuda.device_count())
         metadata["cuda_device_name"] = (
@@ -193,7 +216,11 @@ def environment_metadata(config: BaselineConfig, repo_root: Path | None = None) 
         )
     except ImportError:
         metadata["torch_version"] = None
+        metadata["torch_default_dtype"] = None
         metadata["torch_num_threads"] = None
+        metadata["torch_deterministic_algorithms"] = None
+        metadata["torch_float32_matmul_precision"] = None
+        metadata["torch_cuda_matmul_allow_tf32"] = None
         metadata["cuda_available"] = False
         metadata["cuda_device_count"] = 0
         metadata["cuda_device_name"] = None
@@ -380,11 +407,22 @@ def select_run_data(data: CosQAData, config: BaselineConfig) -> RunData:
     )
 
 
-def run_identity(config: BaselineConfig, *, repo_root: Path | None = None) -> str:
+def run_identity(
+    config: BaselineConfig,
+    *,
+    repo_root: Path | None = None,
+    notebook_sha256: str | None = None,
+    environment: Mapping[str, Any] | None = None,
+) -> str:
+    execution_environment = dict(
+        environment or environment_metadata(config, repo_root=repo_root)
+    )
     payload = {
         "code_version": CODE_VERSION,
         "config": config.as_dict(),
         "git_commit": git_commit(repo_root),
+        "notebook_sha256": notebook_sha256,
+        "execution_environment": execution_environment,
     }
     return sha256_text(canonical_json(payload))[:16]
 
@@ -409,13 +447,20 @@ def expected_cache_metadata(
     kind: str,
     ids: Sequence[str],
     repo_root: Path | None = None,
+    notebook_sha256: str | None = None,
+    environment: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
+    execution_environment = dict(
+        environment or environment_metadata(config, repo_root=repo_root)
+    )
     return {
         "cache_format": 1,
         "kind": kind,
         "identity": identity,
         "code_version": CODE_VERSION,
         "git_commit": git_commit(repo_root),
+        "notebook_sha256": notebook_sha256,
+        "execution_environment": execution_environment,
         "config": config.as_dict(),
         "ids_sha256": sha256_ids(ids),
         "count": len(ids),
@@ -508,10 +553,16 @@ def save_json_cache(
     value: Mapping[str, Any],
     metadata: Mapping[str, Any],
     *,
-    sort_keys: bool = True,
+    sort_keys: bool = False,
 ) -> None:
+    """Write cache data without changing ordered ranking maps.
+
+    Ranking dictionaries use insertion order to break equal-score ties. Keep
+    that order in the data file while keeping metadata canonical for reviews.
+    """
+
     _atomic_write_json(data_path, dict(value), sort_keys=sort_keys)
-    _atomic_write_json(metadata_path, dict(metadata), sort_keys=sort_keys)
+    _atomic_write_json(metadata_path, dict(metadata), sort_keys=True)
 
 
 class E5Encoder:
@@ -608,7 +659,14 @@ def evaluate_ndcg_at_10(
     *,
     cutoff: int = 10,
 ) -> dict[str, Any]:
-    """Call the official COIR evaluator implementation at the primary cutoff."""
+    """Evaluate each saved ranking order with the official COIR evaluator.
+
+    COIR delegates to pytrec_eval, which treats documents with equal scores as
+    tied. Retrieval artifacts also carry a deterministic order for equal-score
+    documents (for example, Faiss's returned order). Convert the ordered scores
+    to unique ordinal scores before evaluation so the metric measures that
+    recorded order consistently across raw and fused rankings.
+    """
 
     if cutoff != 10:
         raise ValueError("this baseline's primary evaluator cutoff is fixed at 10")
@@ -620,10 +678,18 @@ def evaluate_ndcg_at_10(
             "coir-eval==0.7.0 is required for the official COIR evaluator"
         ) from exc
 
-    # The COIR evaluator accepts plain nested dictionaries and may remove
-    # identical query/document IDs in-place. Copy the rankings so the cached
-    # ranking remains the original retrieval output.
-    safe_rankings = {query_id: dict(scores) for query_id, scores in rankings.items()}
+    # Ordinal scores preserve descending score order and use mapping insertion
+    # order to break equal-score ties. They also make one-source RRF exactly
+    # comparable to the same first-stage ranking. The COIR evaluator may remove
+    # identical query/document IDs in-place, so keep these copies separate from
+    # the cached retrieval output.
+    safe_rankings: dict[str, dict[str, float]] = {}
+    for query_id, scores in rankings.items():
+        ordered = sorted(scores.items(), key=lambda item: -float(item[1]))
+        safe_rankings[query_id] = {
+            document_id: float(len(ordered) - rank)
+            for rank, (document_id, _) in enumerate(ordered)
+        }
     ndcg, average_precision, recall, precision = evaluator.evaluate(
         {query_id: dict(scores) for query_id, scores in qrels.items()},
         safe_rankings,
@@ -641,6 +707,7 @@ def evaluate_ndcg_at_10(
         "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
         "evaluator_package": "coir-eval==0.7.0",
         "cutoff": cutoff,
+        "ranking_order_policy": RANKING_ORDER_POLICY,
     }
 
 
@@ -730,6 +797,17 @@ def write_result_artifacts(
     artifact_dir.mkdir(parents=True, exist_ok=True)
     result_path = artifact_dir / "result.json"
     metadata_path = artifact_dir / "metadata.json"
+    identity = str(result.get("cache_identity") or "unidentified")
+    run_dir = artifact_dir / "runs" / identity
+    run_result_path = run_dir / "result.json"
+    run_metadata_path = run_dir / "metadata.json"
+    _atomic_write_json(run_result_path, dict(result))
+    _atomic_write_json(run_metadata_path, dict(metadata or result))
     _atomic_write_json(result_path, dict(result))
     _atomic_write_json(metadata_path, dict(metadata or result))
-    return {"result": str(result_path), "metadata": str(metadata_path)}
+    return {
+        "result": str(result_path),
+        "metadata": str(metadata_path),
+        "run_result": str(run_result_path),
+        "run_metadata": str(run_metadata_path),
+    }

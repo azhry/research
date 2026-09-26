@@ -1,11 +1,13 @@
+# Tested benchmark runtime: Python 3.13.5, CPU inference.
 coir-eval==0.7.0
-datasets>=2.19,<4
-faiss-cpu>=1.7
-jupyter>=1.0
-nbconvert>=7.0
-numpy>=1.24
-pytest>=8.0
-sentence-transformers>=3.0,<6
-transformers>=4.41,<5
-torch>=2.0
-transformers>=4.40,<5
+datasets==3.6.0
+faiss-cpu==1.15.1
+ipykernel==7.3.0
+jupyter==1.1.1
+nbconvert==7.17.1
+numpy==2.5.3
+pytrec-eval-terrier==0.5.10
+pytest==9.1.1
+sentence-transformers==5.7.0
+torch==2.14.0
+transformers==5.17.0

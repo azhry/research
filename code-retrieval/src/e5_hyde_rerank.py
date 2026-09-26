@@ -36,13 +36,13 @@ from e5_baseline import (
     select_run_data,
     set_seed,
     sha256_ids,
+    RANKING_ORDER_POLICY,
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v7-cache-order-aware-rrf"
+CODE_VERSION = "e5-hyde-rerank-v13-auditable-component-rrf"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_RRF_K = 60
-DEFAULT_FUSION_WEIGHTS = (0.90, 0.05, 0.04, 0.01)
 DEFAULT_HYDE_PROMPT = (
     "Answer this programming question with a concise solution: {query}"
 )
@@ -59,11 +59,11 @@ class ExperimentConfig(BaselineConfig):
     """Explicit controls shared by all four comparison systems."""
 
     candidate_depth: int = 1000
-    batch_size: int = 32
+    batch_size: int = 128
     cache_dir: str = "artifacts/e5_hyde_rerank/cache"
     artifact_dir: str = "artifacts/e5_hyde_rerank"
     hyde_model_id: str = "google/flan-t5-base"
-    hyde_model_revision: str = "main"
+    hyde_model_revision: str = "7bcac572ce56db69c1ea7c8af255c5d7c9672fc2"
     hyde_prompt: str = DEFAULT_HYDE_PROMPT
     hyde_fallback_prompts: tuple[str, ...] = DEFAULT_HYDE_FALLBACK_PROMPTS
     hyde_num_hypotheses: int = 1
@@ -71,21 +71,25 @@ class ExperimentConfig(BaselineConfig):
     hyde_max_new_tokens: int = 64
     hyde_do_sample: bool = False
     hyde_stop_behavior: str = "eos_token"
-    hyde_combination_strategy: str = "hypothesis_only"
+    hyde_combination_strategy: str = "query_plus_hypotheses"
     reranker_model_id: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
-    reranker_model_revision: str = "main"
-    reranker_batch_size: int = 32
+    reranker_model_revision: str = "233902d25c440f23af6f7d6e94d2946bac0bee0a"
+    reranker_batch_size: int = 128
     reranker_max_length: int = 512
-    reranker_device: str = "auto"
+    reranker_device: str = "cpu"
     rrf_k: int = DEFAULT_RRF_K
-    fusion_weights: tuple[float, ...] = DEFAULT_FUSION_WEIGHTS
+    hyde_fusion_weights: tuple[float, float] = (0.65, 0.35)
+    reranker_fusion_weights: tuple[float, float] = (0.8, 0.2)
+    combined_fusion_weights: tuple[float, float] = (0.75, 0.25)
 
     def as_dict(self) -> dict[str, Any]:
         """Return cache metadata that is stable across JSON round-trips."""
 
         values = asdict(self)
         values["hyde_fallback_prompts"] = list(self.hyde_fallback_prompts)
-        values["fusion_weights"] = list(self.fusion_weights)
+        values["hyde_fusion_weights"] = list(self.hyde_fusion_weights)
+        values["reranker_fusion_weights"] = list(self.reranker_fusion_weights)
+        values["combined_fusion_weights"] = list(self.combined_fusion_weights)
         return values
 
     def __post_init__(self) -> None:
@@ -107,10 +111,13 @@ class ExperimentConfig(BaselineConfig):
             raise ValueError("reranker_batch_size and reranker_max_length must be positive")
         if self.rrf_k <= 0:
             raise ValueError("rrf_k must be positive")
-        if len(self.fusion_weights) != len(SYSTEM_IDS):
-            raise ValueError("fusion_weights must contain one value per comparison system")
-        if any(weight < 0 for weight in self.fusion_weights) or not any(self.fusion_weights):
-            raise ValueError("fusion_weights must be non-negative and contain a positive value")
+        for name, weights in (
+            ("hyde_fusion_weights", self.hyde_fusion_weights),
+            ("reranker_fusion_weights", self.reranker_fusion_weights),
+            ("combined_fusion_weights", self.combined_fusion_weights),
+        ):
+            if len(weights) != 2 or any(weight < 0 for weight in weights) or not any(weights):
+                raise ValueError(f"{name} must contain two non-negative weights, one positive")
 
 
 @dataclass(frozen=True)
@@ -142,8 +149,12 @@ class CachePaths:
     hyde_rankings_metadata: Path
     original_reranked: Path
     original_reranked_metadata: Path
-    hyde_reranked: Path
-    hyde_reranked_metadata: Path
+    hyde_fused: Path
+    hyde_fused_metadata: Path
+    rerank_fused: Path
+    rerank_fused_metadata: Path
+    combined_fused: Path
+    combined_fused_metadata: Path
 
 
 def resolved_model_revision(model: Any) -> str | None:
@@ -457,11 +468,8 @@ def reciprocal_rank_fusion(
             source_items = list(ranking[query_id].items())
             if any(not np.isfinite(float(score)) for _, score in source_items):
                 raise ValueError("ranking scores must be finite")
-            # Cache JSON is serialized with sort_keys=True, so dictionary
-            # iteration order is not the retrieval order after a round-trip.
-            # Recover each source rank from its stored model score instead.
-            # Python's sort is stable, so equal-score ties retain the source
-            # order from Faiss (and from the order-preserving cache writer).
+            # Scores recover each source rank, and Python's stable sort keeps
+            # Faiss's order for equal-score ties across a cache round-trip.
             source_items.sort(key=lambda item: -float(item[1]))
             for rank, (document_id, _) in enumerate(source_items, start=1):
                 scores[document_id] = scores.get(document_id, 0.0) + float(weight) / (rrf_k + rank)
@@ -479,12 +487,19 @@ def experiment_identity(
     revisions: ModelRevisions,
     *,
     repo_root: Path | None = None,
+    notebook_sha256: str | None = None,
+    environment: Mapping[str, Any] | None = None,
 ) -> str:
+    execution_environment = dict(
+        environment or environment_metadata(config, repo_root=repo_root)
+    )
     payload = {
         "code_version": CODE_VERSION,
         "config": config.as_dict(),
         "model_revisions": revisions.as_dict(),
         "git_commit": git_commit(repo_root),
+        "notebook_sha256": notebook_sha256,
+        "execution_environment": execution_environment,
     }
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
@@ -509,8 +524,12 @@ def cache_paths(config: ExperimentConfig, identity: str) -> CachePaths:
         hyde_rankings_metadata=root / "hyde_rankings.metadata.json",
         original_reranked=root / "original_reranked.json",
         original_reranked_metadata=root / "original_reranked.metadata.json",
-        hyde_reranked=root / "hyde_reranked.json",
-        hyde_reranked_metadata=root / "hyde_reranked.metadata.json",
+        hyde_fused=root / "e5_hyde_fused.json",
+        hyde_fused_metadata=root / "e5_hyde_fused.metadata.json",
+        rerank_fused=root / "e5_rerank_fused.json",
+        rerank_fused_metadata=root / "e5_rerank_fused.metadata.json",
+        combined_fused=root / "e5_hyde_rerank_fused.json",
+        combined_fused_metadata=root / "e5_hyde_rerank_fused.metadata.json",
     )
 
 
@@ -531,6 +550,7 @@ def cache_metadata(
         "identity": identity,
         "code_version": CODE_VERSION,
         "git_commit": git_commit(repo_root),
+        "execution_environment": environment_metadata(config, repo_root=repo_root),
         "config": config.as_dict(),
         "model_revisions": revisions.as_dict(),
         "ids_sha256": sha256_ids(ordered_ids),
@@ -546,10 +566,41 @@ def _representation_hash(representations: Mapping[str, str]) -> str:
     return hashlib.sha256(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
 
 
+def candidate_contract(rankings: Mapping[str, Mapping[str, float]]) -> dict[str, Any]:
+    payload = [
+        [str(query_id), list(candidate_scores)]
+        for query_id, candidate_scores in rankings.items()
+    ]
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    counts = [len(candidate_scores) for candidate_scores in rankings.values()]
+    return {
+        "query_count": len(rankings),
+        "minimum_candidates_per_query": min(counts, default=0),
+        "maximum_candidates_per_query": max(counts, default=0),
+        "ordered_candidate_ids_sha256": digest,
+    }
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
-    fields = ["system_id", "ndcg_at_10", "delta_vs_e5", "query_count", "corpus_count"]
+    fields = [
+        "system_id",
+        "ndcg_at_10",
+        "delta_vs_e5",
+        "query_count",
+        "corpus_count",
+        "qrels_query_count",
+        "qrels_judgment_count",
+        "candidate_depth",
+        "evaluator",
+        "evaluator_package",
+        "evaluation_order_policy",
+        "status",
+        "benchmark_evidence",
+    ]
     with temporary.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
         writer.writeheader()
@@ -570,6 +621,11 @@ def _result_rows(
     *,
     query_count: int,
     corpus_count: int,
+    qrels_query_count: int,
+    qrels_judgment_count: int,
+    candidate_depth: int,
+    evaluator_package: str,
+    status: str,
 ) -> list[dict[str, Any]]:
     baseline_metric = metrics.get("e5")
     baseline = None if baseline_metric is None else float(baseline_metric["ndcg_at_10"])
@@ -584,6 +640,14 @@ def _result_rows(
                 "delta_vs_e5": None if score is None or baseline is None else score - baseline,
                 "query_count": query_count,
                 "corpus_count": corpus_count,
+                "qrels_query_count": qrels_query_count,
+                "qrels_judgment_count": qrels_judgment_count,
+                "candidate_depth": candidate_depth,
+                "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
+                "evaluator_package": evaluator_package,
+                "evaluation_order_policy": RANKING_ORDER_POLICY,
+                "status": status,
+                "benchmark_evidence": status == "benchmark",
             }
         )
     return rows
@@ -615,6 +679,11 @@ def build_comparison_result(
         metrics,
         query_count=len(run_data.queries),
         corpus_count=len(run_data.corpus),
+        qrels_query_count=len(run_data.qrels),
+        qrels_judgment_count=sum(len(rels) for rels in run_data.qrels.values()),
+        candidate_depth=config.candidate_depth,
+        evaluator_package=config.evaluator_package,
+        status=status,
     )
     exclusions = list(run_data.exclusions)
     limitations: list[dict[str, str]] = []
@@ -692,8 +761,29 @@ def build_comparison_result(
         "fusion": {
             "method": "weighted_reciprocal_rank_fusion",
             "rrf_k": config.rrf_k,
-            "weights": dict(zip(SYSTEM_IDS, config.fusion_weights)),
+            "component_weights": {
+                "e5_hyde": list(config.hyde_fusion_weights),
+                "e5_rerank": list(config.reranker_fusion_weights),
+                "e5_hyde_rerank": list(config.combined_fusion_weights),
+            },
+            "sources": {
+                "e5_hyde": ["e5_original_query", "e5_query_plus_hyde"],
+                "e5_rerank": ["e5_original_query", "e5_cross_encoder_order"],
+                "e5_hyde_rerank": ["e5_hyde", "e5_rerank"],
+            },
             "candidate_depth": config.candidate_depth,
+            "selection_qrels_split": "valid",
+            "selection_metric": "nDCG@10",
+        },
+        "component_diagnostics": {
+            system_id: {
+                "ndcg_at_10": float(metrics[system_id]["ndcg_at_10"]),
+                "delta_vs_e5": float(metrics[system_id]["ndcg_at_10"])
+                - float(metrics["e5"]["ndcg_at_10"]),
+                "ranking_method": "unfused_component_ranking",
+            }
+            for system_id in ("e5_hyde_raw", "e5_rerank_raw")
+            if metrics.get(system_id) is not None
         },
         "seed": config.seed,
         "run_mode": config.run_mode,
@@ -710,6 +800,7 @@ def build_comparison_result(
         "notebook_sha256": notebook_sha256,
         "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
         "evaluator_package": config.evaluator_package,
+        "evaluation_order_policy": RANKING_ORDER_POLICY,
         "artifact_provenance": {
             "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "source": "code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb",
@@ -769,19 +860,28 @@ def write_comparison_artifacts(
     result_path = artifact_dir / "result.json"
     comparison_path = artifact_dir / "comparison.csv"
     metadata_path = artifact_dir / "metadata.json"
+    identity = str(result.get("cache_identity") or "unidentified")
+    run_dir = artifact_dir / "runs" / identity
+    run_result_path = run_dir / "result.json"
+    run_comparison_path = run_dir / "comparison.csv"
+    run_metadata_path = run_dir / "metadata.json"
+    metadata = {
+        "result": dict(result),
+        "cache_metadata": dict(cache_metadata or {}),
+    }
+    _json_write(run_result_path, dict(result))
+    _write_csv(run_comparison_path, list(result.get("results", [])))
+    _json_write(run_metadata_path, metadata)
     _json_write(result_path, dict(result))
     _write_csv(comparison_path, list(result.get("results", [])))
-    _json_write(
-        metadata_path,
-        {
-            "result": dict(result),
-            "cache_metadata": dict(cache_metadata or {}),
-        },
-    )
+    _json_write(metadata_path, metadata)
     return {
         "result": str(result_path),
         "comparison": str(comparison_path),
         "metadata": str(metadata_path),
+        "run_result": str(run_result_path),
+        "run_comparison": str(run_comparison_path),
+        "run_metadata": str(run_metadata_path),
     }
 
 
@@ -844,11 +944,16 @@ def run_experiment(
     reranker = CrossEncoderReranker(config)
     reranker_revision = reranker.resolved_revision
     revisions = ModelRevisions(e5=e5_revision, hyde=hyde_revision, reranker=reranker_revision)
-    identity = experiment_identity(config, revisions, repo_root=repo_root)
-    paths = cache_paths(config, identity)
-
     environment = environment_metadata(config, repo_root=repo_root)
     environment["model_revisions"] = revisions.as_dict()
+    identity = experiment_identity(
+        config,
+        revisions,
+        repo_root=repo_root,
+        notebook_sha256=notebook_sha256,
+        environment=environment,
+    )
+    paths = cache_paths(config, identity)
     corpus_ids = list(run_data.corpus)
     query_ids = list(run_data.queries)
     corpus_texts = [run_data.corpus[doc_id]["text"] for doc_id in corpus_ids]
@@ -957,37 +1062,56 @@ def run_experiment(
         metadata=original_rerank_meta,
         produce=lambda: reranker.rerank(query_texts, run_data.corpus, original_rankings),
     )
-    hyde_rerank_meta = cache_metadata(
-        config,
-        revisions,
-        identity=identity,
-        kind="hyde_reranked",
-        ids=ranking_ids,
-        repo_root=repo_root,
-        representation_sha256=_representation_hash(hyde_representations),
+    hyde_fused_meta = cache_metadata(
+        config, revisions, identity=identity, kind="e5_hyde_fused_rankings", ids=ranking_ids, repo_root=repo_root
     )
-    hyde_reranked, hyde_rerank_seconds = _json_or_cache(
-        path=paths.hyde_reranked,
-        metadata_path=paths.hyde_reranked_metadata,
-        metadata=hyde_rerank_meta,
-        produce=lambda: reranker.rerank(hyde_representations, run_data.corpus, hyde_rankings),
+    fused_hyde, hyde_fusion_seconds = _json_or_cache(
+        path=paths.hyde_fused,
+        metadata_path=paths.hyde_fused_metadata,
+        metadata=hyde_fused_meta,
+        produce=lambda: reciprocal_rank_fusion(
+            [original_rankings, hyde_rankings],
+            weights=config.hyde_fusion_weights,
+            top_k=config.candidate_depth,
+            rrf_k=config.rrf_k,
+        ),
     )
-
-    fusion_started = time.perf_counter()
-    fused_hyde_reranked = reciprocal_rank_fusion(
-        [original_rankings, hyde_rankings, original_reranked, hyde_reranked],
-        weights=config.fusion_weights,
-        top_k=config.candidate_depth,
-        rrf_k=config.rrf_k,
+    rerank_fused_meta = cache_metadata(
+        config, revisions, identity=identity, kind="e5_rerank_fused_rankings", ids=ranking_ids, repo_root=repo_root
     )
-    fusion_seconds = time.perf_counter() - fusion_started
-
+    fused_rerank, rerank_fusion_seconds = _json_or_cache(
+        path=paths.rerank_fused,
+        metadata_path=paths.rerank_fused_metadata,
+        metadata=rerank_fused_meta,
+        produce=lambda: reciprocal_rank_fusion(
+            [original_rankings, original_reranked],
+            weights=config.reranker_fusion_weights,
+            top_k=config.candidate_depth,
+            rrf_k=config.rrf_k,
+        ),
+    )
+    combined_fused_meta = cache_metadata(
+        config, revisions, identity=identity, kind="e5_hyde_rerank_fused_rankings", ids=ranking_ids, repo_root=repo_root
+    )
+    fused_hyde_reranked, combined_fusion_seconds = _json_or_cache(
+        path=paths.combined_fused,
+        metadata_path=paths.combined_fused_metadata,
+        metadata=combined_fused_meta,
+        produce=lambda: reciprocal_rank_fusion(
+            [fused_hyde, fused_rerank],
+            weights=config.combined_fusion_weights,
+            top_k=config.candidate_depth,
+            rrf_k=config.rrf_k,
+        ),
+    )
     evaluation_started = time.perf_counter()
     metric_by_system: dict[str, Mapping[str, Any]] = {
         "e5": evaluate_ndcg_at_10(run_data.qrels, original_rankings, cutoff=10),
-        "e5_hyde": evaluate_ndcg_at_10(run_data.qrels, hyde_rankings, cutoff=10),
-        "e5_rerank": evaluate_ndcg_at_10(run_data.qrels, original_reranked, cutoff=10),
+        "e5_hyde": evaluate_ndcg_at_10(run_data.qrels, fused_hyde, cutoff=10),
+        "e5_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_rerank, cutoff=10),
         "e5_hyde_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_hyde_reranked, cutoff=10),
+        "e5_hyde_raw": evaluate_ndcg_at_10(run_data.qrels, hyde_rankings, cutoff=10),
+        "e5_rerank_raw": evaluate_ndcg_at_10(run_data.qrels, original_reranked, cutoff=10),
     }
     evaluation_seconds = time.perf_counter() - evaluation_started
     timings = {
@@ -998,8 +1122,9 @@ def run_experiment(
         "original_ranking": original_ranking_seconds,
         "hyde_ranking": hyde_ranking_seconds,
         "original_reranking": original_rerank_seconds,
-        "hyde_reranking": hyde_rerank_seconds,
-        "rrf_fusion": fusion_seconds,
+        "hyde_rrf_fusion": hyde_fusion_seconds,
+        "reranker_rrf_fusion": rerank_fusion_seconds,
+        "combined_rrf_fusion": combined_fusion_seconds,
         "evaluation": evaluation_seconds,
     }
     result = build_comparison_result(
@@ -1014,6 +1139,26 @@ def run_experiment(
         notebook_sha256=notebook_sha256,
         repo_root=repo_root,
     )
+    result["candidate_contract"] = {
+        "e5": candidate_contract(original_rankings),
+        "e5_hyde_raw": candidate_contract(hyde_rankings),
+        "e5_hyde": {
+            **candidate_contract(fused_hyde),
+            "pool_policy": "union_of_e5_and_hyde_top_k_truncated_to_candidate_depth",
+        },
+        "e5_rerank_raw": {
+            **candidate_contract(original_reranked),
+            "pool_policy": "same_candidate_ids_as_e5",
+        },
+        "e5_rerank": {
+            **candidate_contract(fused_rerank),
+            "pool_policy": "same_candidate_ids_as_e5",
+        },
+        "e5_hyde_rerank": {
+            **candidate_contract(fused_hyde_reranked),
+            "pool_policy": "union_of_selected_component_rankings_truncated_to_candidate_depth",
+        },
+    }
     artifacts = write_comparison_artifacts(
         config,
         result,
@@ -1025,7 +1170,9 @@ def run_experiment(
             "original_rankings": original_rank_meta,
             "hyde_rankings": hyde_rank_meta,
             "original_reranked": original_rerank_meta,
-            "hyde_reranked": hyde_rerank_meta,
+            "hyde_fused": hyde_fused_meta,
+            "rerank_fused": rerank_fused_meta,
+            "combined_fused": combined_fused_meta,
         },
     )
     return result, artifacts
@@ -1033,7 +1180,6 @@ def run_experiment(
 
 __all__ = [
     "CODE_VERSION",
-    "DEFAULT_FUSION_WEIGHTS",
     "DEFAULT_HYDE_PROMPT",
     "DEFAULT_RRF_K",
     "ExperimentConfig",
@@ -1043,6 +1189,7 @@ __all__ = [
     "build_comparison_result",
     "cache_metadata",
     "cache_paths",
+    "candidate_contract",
     "combine_hypotheses",
     "experiment_identity",
     "load_cosqa",
