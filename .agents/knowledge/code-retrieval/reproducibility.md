@@ -36,10 +36,11 @@ only the explicitly requested experimental variable.
   and pinned package versions declared by `code-retrieval/.python-version` and
   `requirements.txt`. Jupyter's default `python3` kernel can point at a
   different global installation even when `nbconvert` was launched from the
-  project's virtual environment. Use `scripts/run_benchmark_notebook.py`,
-  which verifies the pins and explicitly selects the current interpreter as
-  the notebook kernel. A run from another environment is exploratory until
-  rerun under the pinned environment.
+  project's virtual environment. Activate the project's `.venv`, register a
+  kernel that points to that interpreter, and select it explicitly in direct
+  `jupyter nbconvert` execution. Each notebook's setup cell checks Python and
+  package pins before model inference. A run from another environment is
+  exploratory until rerun under the pinned environment.
 
 ### Baseline parity gate
 
@@ -182,27 +183,20 @@ separately. A cache is valid only when dataset/model revisions, preprocessing,
 parameters, and code/config identity match. Unknown-provenance caches are not valid
 primary evidence.
 
-## Execution and analysis traces
+## Notebook outputs and analysis
 
-Run benchmark notebooks through `scripts/run_benchmark_notebook.py`. Every
-invocation preserves a timestamped run directory below its `--output-dir` with
-the executed notebook, readable `execution.log`, structured
-`execution_trace.jsonl`, and `execution.json`. The trace records notebook
-start/end, per-code-cell start/end, section, source hash, elapsed seconds,
-status, textual outputs, and exceptions. Metadata records the source notebook
-hash, commit, pinned Python/runtime, safe execution controls, result/cache
-identity, control checks, and exact artifact paths. A failed run keeps available
-diagnostics and returns non-zero; it is never promoted to benchmark evidence.
+Execute benchmark notebooks directly with Jupyter `nbconvert` and an explicit
+kernel backed by the project's `.venv`. Give each invocation a unique
+timestamped `--output-dir` to preserve its executed notebook. Notebooks write
+their result, metadata, comparison output, and cache files below the configured
+artifact directory. Keep the source notebook unchanged and preserve the exact
+notebook, result, metadata, cache identity, and execution log for each run.
 
-For complete benchmark results, the runner exports `per_query_metrics.csv` and
-`qualitative_cases.jsonl` from the saved rankings and pinned qrels. The metrics
-include per-query nDCG@10, delta versus E5, relevant-document counts, retrieval
-rank observations, and ranking hashes. Qualitative cases preserve query text,
-available HyDE text, top-10 document IDs/scores/relevance, and bounded document
-text previews. The arithmetic mean of each per-query metric must match the
-reported official aggregate within `1e-5`; otherwise export fails. These
-per-query calculations are analysis outputs, not new rankings or synthetic
-benchmark scores.
+Direct `nbconvert` does not produce runner traces or per-query analysis exports.
+If a study requires query-level metrics or qualitative cases, implement or run
+that analysis in the existing experiment notebook and preserve its outputs next
+to the corresponding run. Such analysis is not a new benchmark or synthetic
+model evidence.
 
 The published CoIR Table 3 E5-base/CosQA value is `0.3259` nDCG@10. It may be
 reported as the issue's external paper reference, with protocol differences

@@ -1,3 +1,4 @@
 artifacts/
 *.executed.ipynb
 __pycache__/
+paper/

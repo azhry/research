@@ -28,11 +28,24 @@ Use Python 3.13.5 and install the pinned dependencies before opening a notebook:
 python -m pip install -r code-retrieval/requirements.txt
 ```
 
-Run benchmark notebooks through `scripts/run_benchmark_notebook.py` from the
-`code-retrieval` directory. It checks the interpreter and every dependency
-against the pins, then gives Jupyter a temporary kernel that points to that
-same interpreter. This prevents Jupyter from silently running a notebook with a
-different global Python installation.
+Activate the project's pinned `.venv` from the `code-retrieval` directory and
+register its kernel once:
+
+```bash
+python -m ipykernel install --user --name azh-514-e5 --display-name azh-514-e5
+```
+
+Execute an existing notebook directly with Jupyter, selecting that kernel.
+Each notebook checks the Python and package pins before model inference, so a
+global or otherwise mismatched kernel fails before producing benchmark results.
+For example, from `code-retrieval`:
+
+```bash
+python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank.executed.ipynb --output-dir artifacts/runs/20260928T111402089Z_full-rerun
+```
+
+Keep `python` bound to the active `.venv` so both nbconvert and the kernel use
+the declared environment. Choose a new `--output-dir` for each run.
 
 The smoke notebook defaults to a real-model smoke run so that wiring can be
 checked without encoding the full corpus. Smoke output is explicitly
@@ -44,21 +57,21 @@ artifact and cache identity. All primary experiments use CPU inference and the
 same 1,000-document candidate depth.
 
 ```bash
-E5_BASELINE_MODE=benchmark E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_baseline_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline
+E5_BASELINE_MODE=benchmark E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_baseline_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline
 ```
 
 To execute the full notebook directly from the `code-retrieval` directory:
 
 ```bash
-E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_baseline_full_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline_full
+E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_baseline_full_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline_full
 ```
 
 On PowerShell, use `$env:E5_BASELINE_MODE='benchmark'` in the session before the
 same command. Smoke output is written below
 `code-retrieval/artifacts/e5_baseline/`; full-run
 output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
-ignored by Git. Each run is also kept under `runs/<cache_identity>/`; the root
-`result.json` and `metadata.json` files show the latest run.
+ignored by Git. Caches are stored by cache identity, while the artifact
+directory's `result.json` and `metadata.json` show the latest run.
 
 `notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
 comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
@@ -74,12 +87,13 @@ revisions, fusion controls, and component rankings are saved with each run.
 Smoke output is wiring evidence only.
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --output-dir artifacts/e5_hyde_rerank
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --output-dir artifacts/e5_hyde_rerank
 ```
 
-Comparison output is written below `code-retrieval/artifacts/e5_hyde_rerank/`;
-each run is preserved under `runs/<cache_identity>/` and the directory is
-ignored by Git.
+Comparison output and caches are written below
+`code-retrieval/artifacts/e5_hyde_rerank/`, which is ignored by Git. Set a new,
+timestamped `--output-dir` on each nbconvert invocation to preserve an executed
+notebook for that run.
 
 ## E5 + rerank
 
@@ -94,13 +108,13 @@ device, seed, cache identity, timings, and provenance are recorded.
 The default is a real-model smoke run and is not benchmark evidence:
 
 ```bash
-python scripts/run_benchmark_notebook.py notebooks/e5_rerank_experiment.ipynb --output e5_rerank_smoke.executed.ipynb --output-dir artifacts/e5_rerank
+python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_rerank_experiment.ipynb --output e5_rerank_smoke.executed.ipynb --output-dir artifacts/e5_rerank
 ```
 
 Run the complete comparison with:
 
 ```bash
-E5_RERANK_MODE=benchmark E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_rerank_experiment.ipynb --output e5_rerank_full.executed.ipynb --output-dir artifacts/e5_rerank
+E5_RERANK_MODE=benchmark E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_rerank_experiment.ipynb --output e5_rerank_full.executed.ipynb --output-dir artifacts/e5_rerank
 ```
 
 On PowerShell, set the variables with `$env:E5_RERANK_MODE='benchmark'` and
@@ -129,7 +143,7 @@ The smoke notebook run is wiring evidence only:
 
 ```bash
 cd code-retrieval
-E5_HYDE_MODE=smoke python scripts/run_benchmark_notebook.py notebooks/e5_hyde_experiment.ipynb --output e5_hyde_smoke.executed.ipynb --output-dir artifacts/e5_hyde
+E5_HYDE_MODE=smoke python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_experiment.ipynb --output e5_hyde_smoke.executed.ipynb --output-dir artifacts/e5_hyde
 ```
 
 Run the complete declared benchmark only when model and dataset downloads and
@@ -137,80 +151,39 @@ available memory are sufficient:
 
 ```bash
 cd code-retrieval
-E5_HYDE_MODE=benchmark E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_hyde_experiment.ipynb --output e5_hyde_full.executed.ipynb --output-dir artifacts/e5_hyde
+E5_HYDE_MODE=benchmark E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_experiment.ipynb --output e5_hyde_full.executed.ipynb --output-dir artifacts/e5_hyde
 ```
 
-HyDE output is written below `code-retrieval/artifacts/e5_hyde/`; each run is
-preserved under `runs/<cache_identity>/`. Generated notebooks, caches, results,
-and metadata are ignored by Git.
+HyDE output is written below `code-retrieval/artifacts/e5_hyde/`. Generated
+notebooks, caches, results, and metadata are ignored by Git; use a unique
+`--output-dir` for each run when preserving executed notebooks.
 
-Select fusion weights only from the complete `valid` split. Run both notebooks
-in benchmark mode with validation qrels, then select weights:
-
-```bash
-E5_HYDE_MODE=benchmark E5_HYDE_QRELS_SPLIT=valid E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_hyde_experiment.ipynb --output e5_hyde_valid.executed.ipynb --output-dir artifacts/e5_hyde/validation
-E5_RERANK_MODE=benchmark E5_RERANK_QRELS_SPLIT=valid E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python scripts/run_benchmark_notebook.py notebooks/e5_rerank_experiment.ipynb --output e5_rerank_valid.executed.ipynb --output-dir artifacts/e5_rerank/validation
-python scripts/select_fusion_weights.py
-```
-
-The selector validates complete
-depth-1,000 rankings, sweeps E5/component weights in 0.05 increments, records
-all validation scores and input hashes, and writes the selected settings below
-`artifacts/e5_hyde_rerank/validation/weight_selection.json`. It reads no test
-qrels. Then run `python scripts/verify_test_hyde_rankings.py`; it recomputes and
-checks the held-out query-plus-HyDE rankings without loading test qrels. Finally,
-run `python scripts/assemble_test_fusion_results.py` to apply those fixed
-weights to the complete test split. The assembler verifies ranking provenance,
-scores all systems using the same saved-order tie policy, and re-evaluates the
-historical fixed system for a comparable reference before writing the artifact.
+Fusion weights were selected using the complete `valid` split and are stored in
+`artifacts/e5_hyde_rerank/validation/weight_selection.json`. The four-system
+notebook reads those fixed weights and applies them once to held-out `test`.
+Keep that validation artifact with the ignored local artifacts when rerunning
+the notebook. Never select weights from test results. The removed standalone
+selection, ranking-verification, and result-assembly scripts are not part of
+the notebook workflow.
 
 The official COIR evaluator receives unique ordinal scores that preserve each
 artifact's descending score order and saved insertion order for ties. This
 avoids pytrec_eval treating equal-score documents as unordered ties in one
 system while RRF turns those same ranks into unique scores in another.
 
-Keep the project's `.venv` active for the selector, ranking verifier, and test
-assembler as well; each script rejects a Python or dependency version that
-does not match the pinned runtime.
+The notebook's setup cell checks the pinned Python version and all packages in
+`requirements.txt` before loading models.
 
-## Run logs and analysis traces
+## Executed notebooks and result artifacts
 
-`scripts/run_benchmark_notebook.py` preserves one directory per notebook
-execution below the selected `--output-dir`:
+Use a new timestamped `--output-dir` for each direct `nbconvert` execution to
+preserve its executed notebook with captured cell outputs. Each notebook writes
+`result.json`, `metadata.json`, and its comparison output to the configured
+artifact directory; model inputs and rankings are cached under the recorded
+cache identity. These outputs are local research artifacts and are ignored by
+Git.
 
-```text
-<output-dir>/runs/<UTC timestamp and run id>/
-  <notebook>.ipynb             executed notebook with captured cell outputs
-  execution.log                runner output and readable notebook cell outputs
-  execution_trace.jsonl        notebook start/end and timed cell lifecycle events
-  execution.json               run controls, result identity, checks, and artifact paths
-  analysis/
-    analysis_metadata.json
-    per_query_metrics.csv      one nDCG@10/delta row per query and system
-    qualitative_cases.jsonl    original query, HyDE text, top-10 docs/scores/qrels
-```
-
-The JSONL trace records each code cell's section, source hash, start/end time,
-elapsed time, status, and textual output or exception. The execution metadata
-links the exact notebook hash, commit, pinned runtime, benchmark result/cache
-identity, selected fusion settings, exit codes, and analysis files. The runner
-keeps the original notebook unchanged and removes its temporary trace bootstrap
-from the saved executed copy. Failed runs keep their log, trace, and executed
-notebook when available, and return a non-zero exit status.
-
-Analysis exports require complete benchmark evidence. They are generated from
-the saved ordered rankings and the same pinned CosQA qrels. Per-query nDCG@10 is
-computed with standard graded-relevance gains and checked against each official
-aggregate within `1e-5`; a mismatch stops the export. Qualitative cases include
-the query, optional generated HyDE hypothesis, each available system's top 10
-documents, score, qrels relevance, title/language, and a 400-character text
-preview. These files are local research artifacts under the selected output
-directory and are not added to Git.
-
-Each invocation creates a new run directory, so logs and analysis evidence are
-preserved even when the notebook's convenience `result.json` is updated. A full
-benchmark runner invocation also checks baseline parity for the full E5
-notebook and the issue's requested score comparisons; failed checks are recorded
-in `execution.json` and return non-zero. The published CoIR E5-base/CosQA value
-of `0.3259` is recorded as an external paper reference, with its protocol
-limitations, not as a same-run parity artifact.
+Direct `nbconvert` does not create runner traces or per-query analysis exports.
+Preserve those separately when the analysis workflow requires them. The
+published CoIR E5-base/CosQA value of `0.3259` is an external paper reference,
+not a same-run baseline-parity artifact.
