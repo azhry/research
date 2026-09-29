@@ -1,0 +1,147 @@
+{
+  "schema_version": 1,
+  "study": "AZH-521 independent replication",
+  "seed_protocol": {
+    "seeds": [0, 1, 2, 3, 52],
+    "reason": "Original per-seed results and full seed list were not recovered before implementation.",
+    "checkpoint_selection": "validation exact triplet micro-F1",
+    "test_evaluations_per_run": 1
+  },
+  "encoders": {
+    "mbert": {
+      "display_name": "mBERT",
+      "model_id": "bert-base-multilingual-uncased",
+      "model_revision": "7cbf9a625e29989f6b9c6c2fa68234c304f7e38f",
+      "target_mean_triplet_f1": 75.72,
+      "target_sd": 0.49
+    },
+    "indobert": {
+      "display_name": "IndoBERT",
+      "model_id": "indobenchmark/indobert-base-p1",
+      "model_revision": "c2cd0b51ddce6580eb35263b39b0a1e5fb0a39e2",
+      "target_mean_triplet_f1": 78.01,
+      "target_sd": 2.4,
+      "resolution_note": "Repository is a pinned candidate for the thesis alias; verify checkpoint compatibility before a benchmark run."
+    },
+    "xlmr": {
+      "display_name": "XLM-RoBERTa",
+      "model_id": "xlm-roberta-base",
+      "model_revision": "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+      "target_mean_triplet_f1": 77.97,
+      "target_sd": 0.66
+    },
+    "deberta_absa": {
+      "display_name": "DeBERTa-ABSA",
+      "model_id": "yangheng/deberta-v3-base-absa-v1.1",
+      "model_revision": "10c9dff335a44073e1352360c3a7bc54dc58eb01",
+      "target_mean_triplet_f1": 80.79,
+      "target_sd": 1.1
+    }
+  },
+  "datasets": ["hoasa", "casa"],
+  "architectures": ["emcgcn", "ssgcn"],
+  "in_domain_cells": 16,
+  "transfer_cells": [
+    {
+      "train_dataset": "hoasa",
+      "test_dataset": "casa",
+      "architecture": "emcgcn",
+      "encoder": "deberta_absa"
+    },
+    {
+      "train_dataset": "hoasa",
+      "test_dataset": "casa",
+      "architecture": "ssgcn",
+      "encoder": "deberta_absa"
+    }
+  ],
+  "training": {
+    "optimizer": "adamw",
+    "learning_rate": 0.00002,
+    "dropout": 0.5,
+    "weight_decay": 0.000001,
+    "epochs": 10,
+    "batch_size": 16,
+    "max_seq_len": 128,
+    "max_seq_len_policy": "128 is the planned minimum; expand per pinned encoder to the smallest multiple of 8 that preserves the longest full train/dev sequence. Profiles are fixed to the source and tokenizer revisions below; do not derive this control from test results.",
+    "max_seq_len_profile_source_hashes": {
+      "train": "33714cfdafa40a5c581cb744845268aeea18450265af67ec572623afa7c20b6d",
+      "dev": "a00d16dcb0bcbc6cde1c9650323145c5d22be33620eff7c812fafe36ec06c690"
+    },
+    "max_seq_len_profiles": {
+      "mbert": {
+        "encoder_revision": "7cbf9a625e29989f6b9c6c2fa68234c304f7e38f",
+        "train_max_full_sequence_tokens": 141,
+        "train_max_row_id": 2455,
+        "dev_max_full_sequence_tokens": 166,
+        "dev_max_row_id": 69,
+        "resolved_max_seq_len": 168
+      },
+      "indobert": {
+        "encoder_revision": "c2cd0b51ddce6580eb35263b39b0a1e5fb0a39e2",
+        "train_max_full_sequence_tokens": 106,
+        "train_max_row_id": 1285,
+        "dev_max_full_sequence_tokens": 125,
+        "dev_max_row_id": 69,
+        "resolved_max_seq_len": 128
+      },
+      "xlmr": {
+        "encoder_revision": "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+        "train_max_full_sequence_tokens": 132,
+        "train_max_row_id": 1285,
+        "dev_max_full_sequence_tokens": 153,
+        "dev_max_row_id": 69,
+        "resolved_max_seq_len": 160
+      },
+      "deberta_absa": {
+        "encoder_revision": "10c9dff335a44073e1352360c3a7bc54dc58eb01",
+        "train_max_full_sequence_tokens": 176,
+        "train_max_row_id": 1285,
+        "dev_max_full_sequence_tokens": 201,
+        "dev_max_row_id": 69,
+        "resolved_max_seq_len": 208
+      }
+    },
+    "dynamic_truncate": true,
+    "use_bert_spc": true,
+    "output_dim": 4,
+    "initializer": "xavier_uniform",
+    "cache_dataset": true,
+    "cross_validate_fold": -1
+  },
+  "parser": {
+    "library": "stanza",
+    "version": "1.14.0",
+    "language": "id",
+    "processors": "tokenize,pos,lemma,depparse",
+    "tokenize_pretokenized": true,
+    "head_index_convention": "Stanza 1-based non-root head indices with root 0; PyABSA Instance subtracts one for non-root edges",
+    "token_alignment": "fail unless parsed words equal the source whitespace tokens"
+  },
+  "pyabsa_compatibility": {
+    "version": "2.4.3",
+    "resolved_output_dim": 10,
+    "output_dim_deviation": "PyABSA replaces configured 4 with ten ASTE tag classes",
+    "optimizer_parameter_groups": {
+      "transformer_learning_rate": 0.00002,
+      "non_transformer_learning_rate": 0.001
+    },
+    "checkpoint_selection": "custom instructor calls single-run loop with exact canonical validation metric; internal PyABSA test dataset aliases validation; held-out test is external"
+  },
+  "ssgcn_paper_settings": {
+    "dropout": 0.4,
+    "epochs": 100,
+    "batch_size": 16,
+    "gcn_dim": 300,
+    "alpha": 0.1,
+    "beta": 0.01,
+    "parser": "Stanza English"
+  },
+  "protocol": {
+    "result_label": "independent_replication",
+    "primary_metric": "exact_triplet_micro_f1",
+    "test_timing": "after validation-selected checkpoint is frozen",
+    "implicit_aspect_policy": "preserve in canonical gold; do not pass index -1 into PyABSA's explicit-span adapter",
+    "casa_readiness": "human-adjudicated sentiment-bearing ASTE annotations required"
+  }
+}

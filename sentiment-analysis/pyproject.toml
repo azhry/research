@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "aste-reproduction"
+version = "0.1.0"
+description = "Auditable ASTE data, training, and result tooling for AZH-521"
+requires-python = ">=3.10,<3.11"
+dependencies = [
+  "pyabsa==2.4.3",
+  "stanza==1.14.0",
+  "torch==2.5.1",
+  "transformers==4.29.2",
+  "update-checker<1.0.0",
+  # Transformers 4.29 ships generated SentencePiece protobuf bindings that
+  # are incompatible with protobuf 4+ (the unconstrained 2026 resolver picked 7.x).
+  "protobuf==3.20.3",
+]
+
+[project.scripts]
+aste-audit = "aste_repro.audit:main"
+aste-hoasa-view = "aste_repro.hoasa:main"
+aste-report = "aste_repro.report:main"
+aste-run = "aste_repro.training:main"
+aste-download-parser = "aste_repro.training:download_parser_main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+
+[tool.ruff]
+line-length = 100

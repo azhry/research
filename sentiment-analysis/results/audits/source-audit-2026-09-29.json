@@ -1,0 +1,234 @@
+{
+  "casa": {
+    "alignment": {
+      "test": {
+        "all_reviews_match_source": true,
+        "annotated_tasks": 93,
+        "relations": 170,
+        "source_rows": 180,
+        "total_tasks": 180,
+        "unique_source_reviews": 180
+      },
+      "train": {
+        "all_reviews_match_source": true,
+        "annotated_tasks": 436,
+        "relations": 970,
+        "source_rows": 810,
+        "total_tasks": 810,
+        "unique_source_reviews": 809
+      },
+      "valid": {
+        "all_reviews_match_source": true,
+        "annotated_tasks": 48,
+        "relations": 92,
+        "source_rows": 90,
+        "total_tasks": 90,
+        "unique_source_reviews": 90
+      }
+    },
+    "aste_gold_ready": false,
+    "categories": [
+      "fuel",
+      "machine",
+      "others",
+      "part",
+      "price",
+      "service"
+    ],
+    "labelstudio": {
+      "test": {
+        "annotated_tasks": 93,
+        "aspect_tasks": 93,
+        "opinion_tasks": 93,
+        "relations": 170,
+        "tasks": 180,
+        "unique_texts": 180
+      },
+      "train": {
+        "annotated_tasks": 436,
+        "aspect_tasks": 436,
+        "opinion_tasks": 436,
+        "relations": 970,
+        "tasks": 810,
+        "unique_texts": 809
+      },
+      "valid": {
+        "annotated_tasks": 48,
+        "aspect_tasks": 48,
+        "opinion_tasks": 48,
+        "relations": 92,
+        "tasks": 90,
+        "unique_texts": 90
+      }
+    },
+    "readiness_blockers": [
+      "Label Studio task coverage is partial in all splits.",
+      "Relations do not contain a human-adjudicated sentiment label.",
+      "No approved aspect-to-category mapping artifact is present.",
+      "Duplicate train review rows require an explicit split-preserving policy."
+    ],
+    "repository": "https://github.com/indobenchmark/indonlu",
+    "revision": "ce728f6926a36174b9923dfe49d6a6839b6e9bb7",
+    "splits": {
+      "test": {
+        "category_polarities": {
+          "fuel": {
+            "negative": 10,
+            "neutral": 149,
+            "positive": 21
+          },
+          "machine": {
+            "negative": 14,
+            "neutral": 137,
+            "positive": 29
+          },
+          "others": {
+            "negative": 11,
+            "neutral": 128,
+            "positive": 41
+          },
+          "part": {
+            "negative": 17,
+            "neutral": 128,
+            "positive": 35
+          },
+          "price": {
+            "negative": 10,
+            "neutral": 156,
+            "positive": 14
+          },
+          "service": {
+            "negative": 12,
+            "neutral": 156,
+            "positive": 12
+          }
+        },
+        "duplicate_rows": 0,
+        "rows": 180,
+        "sha256": "843564f24c10d8360fe63395a821f94eb46985abddb94dba6865fcd0a29c70c7",
+        "unique_sentences": 180
+      },
+      "train": {
+        "category_polarities": {
+          "fuel": {
+            "negative": 23,
+            "neutral": 679,
+            "positive": 108
+          },
+          "machine": {
+            "negative": 39,
+            "neutral": 635,
+            "positive": 136
+          },
+          "others": {
+            "negative": 57,
+            "neutral": 531,
+            "positive": 222
+          },
+          "part": {
+            "negative": 77,
+            "neutral": 576,
+            "positive": 157
+          },
+          "price": {
+            "negative": 41,
+            "neutral": 674,
+            "positive": 95
+          },
+          "service": {
+            "negative": 59,
+            "neutral": 690,
+            "positive": 61
+          }
+        },
+        "duplicate_rows": 1,
+        "rows": 810,
+        "sha256": "ffd2a88edf5e270cea79ad84d2ca4170c9a2fd71a38540280d5eb3b95d261f76",
+        "unique_sentences": 809
+      },
+      "valid": {
+        "category_polarities": {
+          "fuel": {
+            "negative": 1,
+            "neutral": 77,
+            "positive": 12
+          },
+          "machine": {
+            "negative": 6,
+            "neutral": 72,
+            "positive": 12
+          },
+          "others": {
+            "negative": 3,
+            "neutral": 59,
+            "positive": 28
+          },
+          "part": {
+            "negative": 14,
+            "neutral": 65,
+            "positive": 11
+          },
+          "price": {
+            "negative": 6,
+            "neutral": 75,
+            "positive": 9
+          },
+          "service": {
+            "negative": 5,
+            "neutral": 77,
+            "positive": 8
+          }
+        },
+        "duplicate_rows": 0,
+        "rows": 90,
+        "sha256": "4ea114d060796e59944b1cf7f0ad7950bd0532024348a17d0f7c6b6464328424",
+        "unique_sentences": 90
+      }
+    }
+  },
+  "hoasa": {
+    "repository": "https://github.com/rdyzakya/IndoLEGO-ABSA",
+    "revision": "0bb3880fed6caf28e05b4eccf329b642e064fd0a",
+    "splits": {
+      "dev": {
+        "duplicate_sentence_rows": 2,
+        "explicit_aspects": 1989,
+        "implicit_aspects": 469,
+        "polarity_triplets": {
+          "NEG": 941,
+          "POS": 1517
+        },
+        "sentences": 1000,
+        "sha256": "a00d16dcb0bcbc6cde1c9650323145c5d22be33620eff7c812fafe36ec06c690",
+        "triplets": 2458
+      },
+      "test": {
+        "duplicate_sentence_rows": 5,
+        "explicit_aspects": 2291,
+        "implicit_aspects": 418,
+        "polarity_triplets": {
+          "NEG": 1098,
+          "NEU": 9,
+          "POS": 1602
+        },
+        "sentences": 1000,
+        "sha256": "3f3883f8c25706d79b1c6bbce253bb548b38c4eb4a786f4b14506d3a28a749a0",
+        "triplets": 2709
+      },
+      "train": {
+        "duplicate_sentence_rows": 30,
+        "explicit_aspects": 6257,
+        "implicit_aspects": 1294,
+        "polarity_triplets": {
+          "NEG": 2953,
+          "NEU": 44,
+          "POS": 4554
+        },
+        "sentences": 3000,
+        "sha256": "33714cfdafa40a5c581cb744845268aeea18450265af67ec572623afa7c20b6d",
+        "triplets": 7551
+      }
+    }
+  },
+  "schema_version": 1
+}
