@@ -8,7 +8,7 @@ Declared seeds: `0, 1, 2, 3, 52`. Expected runs per cell: 5.
 
 | Train → test | Architecture | Encoder | State | n | Seed F1 values | Mean | SD | Median | Min | Max | Chapter 5 target | Δ | Target status |
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| hoasa | emcgcn | mbert | smoke only; failed attempts; interrupted attempts | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
+| hoasa | emcgcn | mbert | partial; failed attempts; interrupted attempts | 1/5 | 0:70.15, 1:—, 2:—, 3:—, 52:— | 70.15 | — | 70.15 | 70.15 | 70.15 | 75.72 | — | not measured |
 | hoasa | emcgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 78.01 | — | not measured |
 | hoasa | emcgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 77.97 | — | not measured |
 | hoasa | emcgcn | deberta_absa | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 80.79 | — | not measured |
@@ -33,7 +33,7 @@ Each value is mean precision/recall/F1 (%) over complete seeds only. Explicit-on
 
 | Train → test | Architecture | Encoder | Explicit-only triplet P/R/F1 | Aspect P/R/F1 | Opinion P/R/F1 | POS P/R/F1 | NEU P/R/F1 | NEG P/R/F1 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| hoasa | emcgcn | mbert | — | — | — | — | — | — |
+| hoasa | emcgcn | mbert | 79.29/74.38/76.76 | 90.26/80.45/85.07 | 89.28/69.20/77.97 | 82.03/64.11/71.97 | 0.00/0.00/0.00 | 75.47/61.66/67.87 |
 | hoasa | emcgcn | indobert | — | — | — | — | — | — |
 | hoasa | emcgcn | xlmr | — | — | — | — | — | — |
 | hoasa | emcgcn | deberta_absa | — | — | — | — | — | — |
