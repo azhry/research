@@ -462,7 +462,7 @@ def run_experiment(
             "valid": str(stage_dir / "valid.txt"),
             "test": str(stage_dir / "test.txt"),
         }
-        config.dataset_name = "AZH521_HOASA"
+        config.dataset_name = dataset.upper()
         config.task = "triplet"
         config.seed = int(seed)
         config.num_epoch = 1 if purpose == "smoke" else int(matrix["training"]["epochs"])
@@ -599,7 +599,7 @@ def run_experiment(
             },
             "ssgcn": {
                 "paper_settings": matrix["ssgcn_paper_settings"],
-                "azh521_shared_matrix_epochs": int(matrix["training"]["epochs"]),
+                "shared_matrix_epochs": int(matrix["training"]["epochs"]),
                 "attention_heads": int(config.ssgcn_attention_heads),
                 "distance_cutoffs": list(range(1, int(config.ssgcn_attention_heads) + 1)),
                 "pyabsa_objective_weights": {
@@ -613,7 +613,7 @@ def run_experiment(
                 "adaptation_notes": [
                     "PyABSA's ten ASTE tag channels are used for each of the five graph relations.",
                     "Aspect attention is computed for every token pair because the PyABSA grid decoder predicts spans jointly.",
-                    "The shared AZH-521 dropout and epoch settings, Indonesian parser, and PyABSA tag/decoder contract differ from the paper setup.",
+                    "The shared benchmark dropout and epoch settings, Indonesian parser, and PyABSA tag/decoder contract differ from the paper setup.",
                 ],
                 "gcn_relation_channels": [
                     "syntax-semantics interaction",

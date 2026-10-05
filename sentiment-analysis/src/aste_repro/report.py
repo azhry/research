@@ -122,7 +122,11 @@ def _format_prf(value: dict[str, float] | None) -> str:
     return "/".join(f"{100.0 * value[name]:.2f}" for name in ("precision", "recall", "f1"))
 
 
-def build_report(runs_dir: Path = DEFAULT_RUNS, matrix_path: Path = MATRIX_PATH) -> str:
+def build_report(
+    runs_dir: Path = DEFAULT_RUNS,
+    matrix_path: Path = MATRIX_PATH,
+    title: str = "Sentiment Analysis",
+) -> str:
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
     seeds = [int(seed) for seed in matrix["seed_protocol"]["seeds"]]
     runs = _load_runs(runs_dir) if runs_dir.exists() else []
@@ -167,7 +171,7 @@ def build_report(runs_dir: Path = DEFAULT_RUNS, matrix_path: Path = MATRIX_PATH)
         rows.append((*key, stats, None))
 
     lines = [
-        "# AZH-521 Experiment Results",
+        f"# {title} Experiment Results",
         "",
         "Status: **independent replication**. Original per-seed artifacts and the full seed list were not recovered.",
         "",
@@ -299,7 +303,8 @@ def main() -> int:
     parser.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    report = build_report(args.runs)
+    title = args.output.stem.removesuffix("-report").upper()
+    report = build_report(args.runs, title=title)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")
     print(f"wrote {args.output} ({len(report)} characters)")

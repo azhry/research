@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "aste-reproduction"
 version = "0.1.0"
-description = "Auditable ASTE data, training, and result tooling for AZH-521"
+description = "Auditable ASTE data, training, and result tooling"
 requires-python = ">=3.10,<3.11"
 dependencies = [
   "pyabsa==2.4.3",

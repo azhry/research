@@ -89,7 +89,7 @@ def _download(url: str, destination: Path, expected_sha256: str) -> None:
             raise AuditError(f"refusing to replace existing file with unexpected hash: {destination}")
         return
 
-    request = Request(url, headers={"User-Agent": "AZH-521-reproduction/0.1"})
+    request = Request(url, headers={"User-Agent": "aste-reproduction/0.1"})
     with urlopen(request, timeout=60) as response:
         body = response.read()
     actual = hashlib.sha256(body).hexdigest()

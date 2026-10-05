@@ -1,3 +1,3 @@
-"""Reproducible ASTE experiment utilities for AZH-521."""
+"""Reusable tooling for auditable aspect sentiment triplet extraction."""
 
 __version__ = "0.1.0"

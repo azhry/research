@@ -43,11 +43,13 @@ report it as an evaluated benchmark.
 ## Workspace map
 
 - `sentiment-analysis/README.md` describes the reusable experiment workflow.
-- `sentiment-analysis/plan-and-specifications.md` holds the current study's
-  approved protocol and scope.
+- Study- and experiment-specific protocols in `sentiment-analysis/` define the
+  scope and deliverables for their respective work; consult the relevant
+  specification without treating any single issue as the definition of this
+  research area.
 - `sentiment-analysis/results/` contains run-linked result summaries; run
   directories retain detailed metrics and provenance.
 
-AZH-521 is the current reproduction work item in this research area. Its ticket
-and run-specific plan determine the active deliverables; this page records
-cross-study context and should remain useful when that work item changes.
+This page records research-area context shared across sentiment-analysis
+studies. Keep issue IDs, per-study questions, and run matrices in their
+corresponding specifications and experiment artifacts.
