@@ -186,6 +186,35 @@ def build_report(
     else:
         target_outcome = f"**Chapter 5 target outcome: NOT MET ({target_met_count}/{len(target_rows)} baseline means).**"
 
+    reference_diagnostics = []
+    for train, test, architecture, encoder, stats, target in target_rows:
+        complete = [
+            row
+            for row in grouped.get((train, test, architecture, encoder), [])
+            if row["manifest"].get("status") == "complete" and row["metrics"] is not None
+        ]
+        explicit = _mean_metric(complete, "test", "explicit_only_triplet")
+        explicit_f1 = 100.0 * explicit["f1"] if explicit is not None else None
+        reference_diagnostics.append((encoder, stats, target, explicit_f1))
+    explicit_only_deltas = [
+        explicit_f1 - stats["mean"]
+        for _encoder, stats, _target, explicit_f1 in reference_diagnostics
+        if explicit_f1 is not None and stats["mean"] is not None
+    ]
+    explicit_only_target_count = sum(
+        explicit_f1 is not None and explicit_f1 >= target
+        for _encoder, _stats, target, explicit_f1 in reference_diagnostics
+    )
+    if explicit_only_deltas:
+        implicit_sensitivity = (
+            f"On the same selected predictions, excluding implicit-aspect gold raises mean F1 by "
+            f"{min(explicit_only_deltas):.2f}–{max(explicit_only_deltas):.2f} points; "
+            f"{explicit_only_target_count}/{len(target_rows)} explicit-only means meet the historical references. "
+            "Chapter 5 does not document whether its targets excluded implicit triplets, so this quantifies metric sensitivity without establishing exact comparability."
+        )
+    else:
+        implicit_sensitivity = "Explicit-only sensitivity is not yet measurable for the Chapter 5 baseline cells."
+
     lines = [
         f"# {title} results",
         "",
@@ -193,7 +222,9 @@ def build_report(
         "",
         target_outcome,
         "",
-        "The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome. These differences affect comparability but do not by themselves establish the full cause of any shortfall.",
+        "The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome.",
+        "",
+        implicit_sensitivity,
         "",
         "Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Attempt counts for the HoASA EMCGCN baseline are summarized below.",
         "",
@@ -236,21 +267,15 @@ def build_report(
             "",
             "The table separates the primary full-gold metric from explicit-only diagnostics. The latter exclude implicit-aspect triplets and are not used to declare the Chapter 5 target met.",
             "",
-            "| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ |",
-            "| --- | ---: | ---: | ---: | ---: | ---: |",
+            "| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ | F1 change when implicit gold is excluded |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
-    for _train, _test, _architecture, encoder, stats, target in target_rows:
-        complete = [
-            row
-            for row in grouped.get((_train, _test, _architecture, encoder), [])
-            if row["manifest"].get("status") == "complete" and row["metrics"] is not None
-        ]
-        explicit = _mean_metric(complete, "test", "explicit_only_triplet")
-        explicit_f1 = 100.0 * explicit["f1"] if explicit is not None else None
+    for encoder, stats, target, explicit_f1 in reference_diagnostics:
         primary_delta = stats["mean"] - target if stats["mean"] is not None else None
         diagnostic_delta = explicit_f1 - target if explicit_f1 is not None else None
-        values = (stats["mean"], primary_delta, explicit_f1, diagnostic_delta)
+        implicit_delta = explicit_f1 - stats["mean"] if explicit_f1 is not None and stats["mean"] is not None else None
+        values = (stats["mean"], primary_delta, explicit_f1, diagnostic_delta, implicit_delta)
         formatted = [f"{value:.2f}" if value is not None else "—" for value in values]
         lines.append(f"| {encoder} | {target:.2f} | " + " | ".join(formatted) + " |")
 

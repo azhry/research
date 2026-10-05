@@ -4,7 +4,9 @@ Status: **independent replication**. Original per-seed artifacts and the full se
 
 **Chapter 5 target outcome: NOT MET (0/4 baseline means).**
 
-The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome. These differences affect comparability but do not by themselves establish the full cause of any shortfall.
+The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome.
+
+On the same selected predictions, excluding implicit-aspect gold raises mean F1 by 6.50–7.11 points; 3/4 explicit-only means meet the historical references. Chapter 5 does not document whether its targets excluded implicit triplets, so this quantifies metric sensitivity without establishing exact comparability.
 
 Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Attempt counts for the HoASA EMCGCN baseline are summarized below.
 
@@ -35,12 +37,12 @@ Declared seeds: `0, 1, 2, 3, 52`. Expected runs per cell: 5.
 
 The table separates the primary full-gold metric from explicit-only diagnostics. The latter exclude implicit-aspect triplets and are not used to declare the Chapter 5 target met.
 
-| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| mbert | 75.72 | 70.86 | -4.86 | 77.68 | 1.96 |
-| indobert | 78.01 | 71.86 | -6.15 | 78.80 | 0.79 |
-| xlmr | 77.97 | 72.80 | -5.17 | 79.91 | 1.94 |
-| deberta_absa | 80.79 | 69.67 | -11.12 | 76.17 | -4.62 |
+| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ | F1 change when implicit gold is excluded |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| mbert | 75.72 | 70.86 | -4.86 | 77.68 | 1.96 | 6.82 |
+| indobert | 78.01 | 71.86 | -6.15 | 78.80 | 0.79 | 6.94 |
+| xlmr | 77.97 | 72.80 | -5.17 | 79.91 | 1.94 | 7.11 |
+| deberta_absa | 80.79 | 69.67 | -11.12 | 76.17 | -4.62 | 6.50 |
 
 ## HoASA EMCGCN attempt history
 
