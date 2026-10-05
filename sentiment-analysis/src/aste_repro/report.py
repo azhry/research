@@ -136,7 +136,7 @@ def build_report(
         run for run in all_runs
         if run["manifest"].get("experiment_protocol_id") == protocol_id
     ]
-    superseded_baseline_runs = [
+    prior_baseline_runs = [
         run for run in all_runs
         if run["manifest"].get("experiment_protocol_id") != protocol_id
         and run["manifest"].get("train_dataset", run["manifest"].get("dataset")) == "hoasa"
@@ -229,7 +229,7 @@ def build_report(
             "Chapter 5 does not document whether its targets excluded implicit triplets, so this quantifies metric sensitivity without establishing exact comparability."
         )
     else:
-        implicit_sensitivity = "Explicit-only sensitivity is not yet measurable for the Chapter 5 baseline cells."
+        implicit_sensitivity = "Explicit-only sensitivity is not yet measurable under the active uniform-rate protocol. Archived runs with PyABSA's default optimizer schedule are shown separately below and do not establish a match to the Chapter 5 targets."
 
     lines = [
         f"# {title} results",
@@ -248,28 +248,51 @@ def build_report(
         "",
         f"Declared seeds: `{', '.join(map(str, seeds))}`. Expected runs per cell: {len(seeds)}.",
         "",
-        "## Prior runs superseded by the optimizer-rate correction",
+        "## Earlier complete runs with PyABSA's default optimizer groups",
         "",
-        "Earlier complete HoASA EMCGCN runs remain unchanged in their run folders. Their manifests show 2e-5 for Transformer parameters and 1e-3 for graph/classifier parameters because PyABSA 2.4.3 hard-codes the latter. The approved matrix specifies one 2e-5 learning rate, so those runs are retained as historical evidence and excluded from all active-protocol scores and target comparisons.",
+        "These complete runs used PyABSA 2.4.3's optimizer groups: 2e-5 for Transformer parameters and 1e-3 for graph/classifier parameters. The Chapter 5 configuration table lists `learning_rate=2e-5` but does not say whether the graph groups were overridden. The active protocol explicitly uses 2e-5 for every group, so the two schedules are reported separately and are not pooled. The earlier runs remain measured evidence under their recorded settings.",
         "",
-        "| Encoder | Runs | Seed F1 values (%) | Historical mean (%) |",
-        "| --- | ---: | --- | ---: |",
+        "The explicit-only scores below use the same predictions and exclude implicit-aspect triplets from the gold denominator. Chapter 5 does not document its implicit-label policy, and it selects the best test-set epoch while this replication selects on validation. These figures are sensitivity diagnostics, not evidence that a target has been reproduced.",
+        "",
+        "| Encoder | Runs | Full-gold seed F1 (%) | Full-gold mean | Explicit-only seed F1 (%) | Explicit-only mean | Chapter 5 reference | Diagnostic Δ vs reference |",
+        "| --- | ---: | --- | ---: | --- | ---: | ---: | ---: |",
     ]
     for encoder in matrix["encoders"]:
         prior = sorted(
-            (run for run in superseded_baseline_runs if run["manifest"].get("encoder") == encoder),
+            (run for run in prior_baseline_runs if run["manifest"].get("encoder") == encoder),
             key=lambda run: (int(run["manifest"]["seed"]), run["manifest"].get("run_id", "")),
         )
         scores = [
             100.0 * float(run["metrics"]["test"]["triplet"]["f1"])
             for run in prior
         ]
+        explicit_scores = [
+            100.0 * float(run["metrics"]["test_explicit_aspects_only"]["triplet"]["f1"])
+            for run in prior
+            if run["metrics"].get("test_explicit_aspects_only", {}).get("triplet", {}).get("f1") is not None
+        ]
         score_text = ", ".join(
             f"{run['manifest']['seed']}:{score:.2f}"
             for run, score in zip(prior, scores)
         ) or "—"
         historical_mean = f"{statistics.mean(scores):.2f}" if scores else "—"
-        lines.append(f"| {encoder} | {len(scores)} | {score_text} | {historical_mean} |")
+        explicit_score_text = ", ".join(
+            f"{run['manifest']['seed']}:{100.0 * float(run['metrics']['test_explicit_aspects_only']['triplet']['f1']):.2f}"
+            for run in prior
+            if run["metrics"].get("test_explicit_aspects_only", {}).get("triplet", {}).get("f1") is not None
+        ) or "—"
+        explicit_mean = f"{statistics.mean(explicit_scores):.2f}" if explicit_scores else "—"
+        target = matrix["encoders"][encoder].get("target_mean_triplet_f1")
+        explicit_delta = (
+            f"{statistics.mean(explicit_scores) - float(target):+.2f}"
+            if explicit_scores and target is not None
+            else "—"
+        )
+        target_text = f"{float(target):.2f}" if target is not None else "—"
+        lines.append(
+            f"| {encoder} | {len(scores)} | {score_text} | {historical_mean} | "
+            f"{explicit_score_text} | {explicit_mean} | {target_text} | {explicit_delta} |"
+        )
 
     lines.extend(
         [
@@ -346,10 +369,10 @@ def build_report(
             "",
             "## Secondary metrics",
             "",
-            "Each value is mean precision/recall/F1 (%) over complete seeds only. Explicit-only triplet scores exclude implicit-aspect gold; primary triplet scores above retain it.",
+            "Each value is mean precision/recall/F1 (%) over complete seeds only. The full-source opinion metric includes opinion spans linked to implicit-aspect gold even though those triplets are absent from the PyABSA training view; the adjacent explicit-triplet-only opinion metric removes those spans from its denominator.",
             "",
-            "| Train → test | Architecture | Encoder | Explicit-only triplet P/R/F1 | Aspect P/R/F1 | Opinion P/R/F1 | POS P/R/F1 | NEU P/R/F1 | NEG P/R/F1 |",
-            "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+            "| Train → test | Architecture | Encoder | Explicit-only triplet P/R/F1 | Aspect P/R/F1 | Opinion P/R/F1 (full source) | Opinion P/R/F1 (explicit triplets) | POS P/R/F1 | NEU P/R/F1 | NEG P/R/F1 |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
         ]
     )
     for train, test, architecture, encoder, _stats, _target in rows:
@@ -363,6 +386,7 @@ def build_report(
             _mean_metric(complete, "test", "explicit_only_triplet"),
             _mean_metric(complete, "test", "aspect_term"),
             _mean_metric(complete, "test", "opinion_term"),
+            _mean_metric(complete, "test_explicit_aspects_only", "opinion_term"),
             _mean_metric(complete, "test", "by_polarity", "POS"),
             _mean_metric(complete, "test", "by_polarity", "NEU"),
             _mean_metric(complete, "test", "by_polarity", "NEG"),
