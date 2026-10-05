@@ -315,6 +315,10 @@ def run_experiment(
     smoke_examples: int = 24,
     download_parser: bool = False,
 ) -> dict[str, Any]:
+    # Notebook kernels may export an inline backend that is unavailable in the
+    # isolated Python 3.10 training process. PyABSA imports matplotlib during
+    # setup, so force a supported headless backend before loading it.
+    os.environ["MPLBACKEND"] = "Agg"
     if purpose not in {"smoke", "benchmark"}:
         raise ValueError("purpose must be `smoke` or `benchmark`")
     if dataset != "hoasa":
@@ -549,6 +553,7 @@ def run_experiment(
                 "torch_device": str(trainer.config.device),
                 "cuda_available": bool(torch.cuda.is_available()),
                 "cuda_version": torch.version.cuda,
+                "matplotlib_backend": os.environ["MPLBACKEND"],
             },
             "encoder": model_ref,
             "encoder_snapshot": str(resolved_model_dir),

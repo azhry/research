@@ -27,10 +27,10 @@ Earlier complete HoASA EMCGCN runs remain unchanged in their run folders. Their 
 
 | Train → test | Architecture | Encoder | State | n | Seed F1 values | Mean | SD | Median | Min | Max | Chapter 5 target | Δ | Target status |
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| hoasa | emcgcn | mbert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
-| hoasa | emcgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 78.01 | — | not measured |
-| hoasa | emcgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 77.97 | — | not measured |
-| hoasa | emcgcn | deberta_absa | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 80.79 | — | not measured |
+| hoasa | emcgcn | mbert | failed | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
+| hoasa | emcgcn | indobert | failed | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 78.01 | — | not measured |
+| hoasa | emcgcn | xlmr | failed | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 77.97 | — | not measured |
+| hoasa | emcgcn | deberta_absa | failed | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 80.79 | — | not measured |
 | hoasa | ssgcn | mbert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
@@ -63,10 +63,10 @@ Complete seed runs contribute to the score table. Smoke, failed, and interrupted
 
 | Encoder | Complete seed runs | Smoke attempts | Failed attempts | Interrupted attempts |
 | --- | ---: | ---: | ---: | ---: |
-| mbert | 0/5 | 0 | 0 | 0 |
-| indobert | 0/5 | 0 | 0 | 0 |
-| xlmr | 0/5 | 0 | 0 | 0 |
-| deberta_absa | 0/5 | 0 | 0 | 0 |
+| mbert | 0/5 | 0 | 5 | 0 |
+| indobert | 0/5 | 0 | 5 | 0 |
+| xlmr | 0/5 | 0 | 5 | 0 |
+| deberta_absa | 0/5 | 0 | 5 | 0 |
 
 ## Secondary metrics
 
