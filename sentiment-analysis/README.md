@@ -1,4 +1,4 @@
-# AZH-521 ASTE reproduction pipeline
+# Indonesian ASTE reproduction pipeline
 
 This project provides pinned source audits, HoASA adapters, PyABSA-compatible
 EMCGCN and SSGCN training, leakage-controlled evaluation, and a seed-aware
@@ -57,12 +57,12 @@ blocked until their sentiment-bearing human ASTE gold is frozen.
 
 ## Research notebook
 
-Use [`notebooks/azh-521-experiments.ipynb`](notebooks/azh-521-experiments.ipynb) to inspect live and completed runs, launch an explicitly enabled benchmark condition or continue the missing HoASA + EMCGCN seed matrix, summarize measured seed scores, and refresh the aggregate report. It delegates training to `aste-run`; execution is disabled by default and overlapping benchmark queues are rejected.
+Use [`notebooks/aste-reproduction-experiments.ipynb`](notebooks/aste-reproduction-experiments.ipynb) to inspect live and completed runs, launch an explicitly enabled benchmark condition or continue a missing HoASA seed matrix, summarize measured seed scores, and refresh the aggregate report. It delegates training to `aste-run`; execution is disabled by default and overlapping benchmark queues are rejected.
 
 ## Report
 
 ```bash
-uv run --python 3.10 --project sentiment-analysis aste-report --output sentiment-analysis/results/azh-521-report.md
+uv run --python 3.10 --project sentiment-analysis aste-report --output sentiment-analysis/results/aste-reproduction-report.md
 ```
 
 Only `complete` run manifests contribute to benchmark scores. The report

@@ -1,8 +1,12 @@
-# AZH-521 Experiment Results
+# Indonesian ASTE reproduction results
 
 Status: **independent replication**. Original per-seed artifacts and the full seed list were not recovered.
 
-Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Smoke, failed attempts, and interrupted attempts remain visible in the cell status.
+**Chapter 5 target outcome: NOT MET (0/4 baseline means).**
+
+The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome. These differences affect comparability but do not by themselves establish the full cause of any shortfall.
+
+Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Attempt counts for the HoASA EMCGCN baseline are summarized below.
 
 Declared seeds: `0, 1, 2, 3, 52`. Expected runs per cell: 5.
 
@@ -26,6 +30,28 @@ Declared seeds: `0, 1, 2, 3, 52`. Expected runs per cell: 5.
 | casa | ssgcn | deberta_absa | blocked: human gold | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa → casa | emcgcn | deberta_absa | blocked: CASA human gold | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa → casa | ssgcn | deberta_absa | blocked: CASA human gold | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
+
+## Chapter 5 reference diagnostics
+
+The table separates the primary full-gold metric from explicit-only diagnostics. The latter exclude implicit-aspect triplets and are not used to declare the Chapter 5 target met.
+
+| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| mbert | 75.72 | 70.86 | -4.86 | 77.68 | 1.96 |
+| indobert | 78.01 | 71.86 | -6.15 | 78.80 | 0.79 |
+| xlmr | 77.97 | 72.80 | -5.17 | 79.91 | 1.94 |
+| deberta_absa | 80.79 | 69.67 | -11.12 | 76.17 | -4.62 |
+
+## HoASA EMCGCN attempt history
+
+Complete seed runs contribute to the score table. Smoke, failed, and interrupted attempts remain in the run archive and are excluded from benchmark metrics.
+
+| Encoder | Complete seed runs | Smoke attempts | Failed attempts | Interrupted attempts |
+| --- | ---: | ---: | ---: | ---: |
+| mbert | 5/5 | 3 | 6 | 3 |
+| indobert | 5/5 | 0 | 0 | 0 |
+| xlmr | 5/5 | 0 | 1 | 0 |
+| deberta_absa | 5/5 | 0 | 2 | 0 |
 
 ## Secondary metrics
 

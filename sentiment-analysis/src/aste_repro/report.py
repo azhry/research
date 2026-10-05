@@ -125,9 +125,10 @@ def _format_prf(value: dict[str, float] | None) -> str:
 def build_report(
     runs_dir: Path = DEFAULT_RUNS,
     matrix_path: Path = MATRIX_PATH,
-    title: str = "Sentiment Analysis",
+    title: str | None = None,
 ) -> str:
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    title = title or matrix.get("study", "Sentiment Analysis")
     seeds = [int(seed) for seed in matrix["seed_protocol"]["seeds"]]
     runs = _load_runs(runs_dir) if runs_dir.exists() else []
     grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
@@ -170,12 +171,31 @@ def build_report(
             stats["status"] = "blocked: CASA human gold"
         rows.append((*key, stats, None))
 
+    target_rows = [row for row in rows if row[5] is not None]
+    target_cells_complete = all(row[4]["status"] == "complete" for row in target_rows)
+    target_met_count = sum(
+        row[4]["status"] == "complete"
+        and row[4]["mean"] is not None
+        and row[4]["mean"] >= row[5]
+        for row in target_rows
+    )
+    if not target_rows or not target_cells_complete:
+        target_outcome = "**Chapter 5 target outcome: NOT YET FULLY MEASURED.**"
+    elif target_met_count == len(target_rows):
+        target_outcome = f"**Chapter 5 target outcome: MET ({target_met_count}/{len(target_rows)} baseline means).**"
+    else:
+        target_outcome = f"**Chapter 5 target outcome: NOT MET ({target_met_count}/{len(target_rows)} baseline means).**"
+
     lines = [
-        f"# {title} Experiment Results",
+        f"# {title} results",
         "",
         "Status: **independent replication**. Original per-seed artifacts and the full seed list were not recovered.",
         "",
-        "Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Smoke, failed attempts, and interrupted attempts remain visible in the cell status.",
+        target_outcome,
+        "",
+        "The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome. These differences affect comparability but do not by themselves establish the full cause of any shortfall.",
+        "",
+        "Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Attempt counts for the HoASA EMCGCN baseline are summarized below.",
         "",
         f"Declared seeds: `{', '.join(map(str, seeds))}`. Expected runs per cell: {len(seeds)}.",
         "",
@@ -207,6 +227,48 @@ def build_report(
             f"| {display} | {architecture} | {encoder} | {stats['status']} | {stats['n']}/{stats['expected']} | {score_text} | "
             + " | ".join(formatted)
             + f" | {target_text} | {delta_text} | {target_status} |"
+        )
+
+    lines.extend(
+        [
+            "",
+            "## Chapter 5 reference diagnostics",
+            "",
+            "The table separates the primary full-gold metric from explicit-only diagnostics. The latter exclude implicit-aspect triplets and are not used to declare the Chapter 5 target met.",
+            "",
+            "| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for _train, _test, _architecture, encoder, stats, target in target_rows:
+        complete = [
+            row
+            for row in grouped.get((_train, _test, _architecture, encoder), [])
+            if row["manifest"].get("status") == "complete" and row["metrics"] is not None
+        ]
+        explicit = _mean_metric(complete, "test", "explicit_only_triplet")
+        explicit_f1 = 100.0 * explicit["f1"] if explicit is not None else None
+        primary_delta = stats["mean"] - target if stats["mean"] is not None else None
+        diagnostic_delta = explicit_f1 - target if explicit_f1 is not None else None
+        values = (stats["mean"], primary_delta, explicit_f1, diagnostic_delta)
+        formatted = [f"{value:.2f}" if value is not None else "—" for value in values]
+        lines.append(f"| {encoder} | {target:.2f} | " + " | ".join(formatted) + " |")
+
+    lines.extend(
+        [
+            "",
+            "## HoASA EMCGCN attempt history",
+            "",
+            "Complete seed runs contribute to the score table. Smoke, failed, and interrupted attempts remain in the run archive and are excluded from benchmark metrics.",
+            "",
+            "| Encoder | Complete seed runs | Smoke attempts | Failed attempts | Interrupted attempts |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for _train, _test, _architecture, encoder, stats, _target in target_rows:
+        lines.append(
+            f"| {encoder} | {stats['n']}/{stats['expected']} | {stats['smoke_runs']} | "
+            f"{stats['failed_runs']} | {stats['interrupted_runs']} |"
         )
 
     lines.extend(
@@ -303,8 +365,7 @@ def main() -> int:
     parser.add_argument("--runs", type=Path, default=DEFAULT_RUNS)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    title = args.output.stem.removesuffix("-report").upper()
-    report = build_report(args.runs, title=title)
+    report = build_report(args.runs)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")
     print(f"wrote {args.output} ({len(report)} characters)")

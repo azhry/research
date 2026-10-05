@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "study": "AZH-521 independent replication",
+  "study": "Indonesian ASTE reproduction",
   "seed_protocol": {
     "seeds": [0, 1, 2, 3, 52],
     "reason": "Original per-seed results and full seed list were not recovered before implementation.",
