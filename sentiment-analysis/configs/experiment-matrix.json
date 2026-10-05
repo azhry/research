@@ -1,5 +1,6 @@
 {
   "schema_version": 1,
+  "experiment_protocol_id": "indonesian-aste-matrix-v2-uniform-learning-rate",
   "study": "Indonesian ASTE reproduction",
   "seed_protocol": {
     "seeds": [0, 1, 2, 3, 52],
@@ -58,6 +59,7 @@
   "training": {
     "optimizer": "adamw",
     "learning_rate": 0.00002,
+    "learning_rate_policy": "Apply the configured learning rate to every optimizer parameter group, overriding PyABSA 2.4.3's hard-coded 1e-3 rate for non-Transformer EMCGCN parameters.",
     "dropout": 0.5,
     "weight_decay": 0.000001,
     "epochs": 10,
@@ -123,8 +125,8 @@
     "resolved_output_dim": 10,
     "output_dim_deviation": "PyABSA replaces configured 4 with ten ASTE tag classes",
     "optimizer_parameter_groups": {
-      "transformer_learning_rate": 0.00002,
-      "non_transformer_learning_rate": 0.001
+      "learning_rate": 0.00002,
+      "policy": "all parameter groups use the configured training.learning_rate"
     },
     "checkpoint_selection": "custom instructor calls single-run loop with exact canonical validation metric; internal PyABSA test dataset aliases validation; held-out test is external"
   },

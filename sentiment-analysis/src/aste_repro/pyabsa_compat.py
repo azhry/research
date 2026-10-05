@@ -484,6 +484,12 @@ def build_pyabsa_training_classes(
             optimizer = getattr(self, "optimizer", None)
             if optimizer is None:
                 raise RuntimeError("PyABSA did not initialize its optimizer before training")
+            # PyABSA 2.4.3 hard-codes 1e-3 for EMCGCN's non-Transformer
+            # parameter groups, even when config.learning_rate is set. The
+            # approved experiment matrix specifies one AdamW learning rate.
+            configured_learning_rate = float(self.config.learning_rate)
+            for group in optimizer.param_groups:
+                group["lr"] = configured_learning_rate
             observer["optimizer_groups"] = [
                 {
                     "learning_rate": float(group["lr"]),
@@ -493,6 +499,11 @@ def build_pyabsa_training_classes(
                 }
                 for group in optimizer.param_groups
             ]
+            if any(
+                group["learning_rate"] != configured_learning_rate
+                for group in observer["optimizer_groups"]
+            ):
+                raise RuntimeError("optimizer parameter groups do not honor the configured learning rate")
 
         def _load_dataset_and_prepare_dataloader(self):
             self.tokenizer = PretrainedTokenizer(self.config)

@@ -357,6 +357,7 @@ def run_experiment(
     manifest_path = run_dir / "manifest.json"
     manifest: dict[str, Any] = {
         "schema_version": 1,
+        "experiment_protocol_id": matrix["experiment_protocol_id"],
         "run_id": run_id,
         "status": "running",
         "purpose": purpose,

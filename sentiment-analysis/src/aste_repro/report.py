@@ -129,8 +129,24 @@ def build_report(
 ) -> str:
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
     title = title or matrix.get("study", "Sentiment Analysis")
+    protocol_id = matrix["experiment_protocol_id"]
     seeds = [int(seed) for seed in matrix["seed_protocol"]["seeds"]]
-    runs = _load_runs(runs_dir) if runs_dir.exists() else []
+    all_runs = _load_runs(runs_dir) if runs_dir.exists() else []
+    runs = [
+        run for run in all_runs
+        if run["manifest"].get("experiment_protocol_id") == protocol_id
+    ]
+    superseded_baseline_runs = [
+        run for run in all_runs
+        if run["manifest"].get("experiment_protocol_id") != protocol_id
+        and run["manifest"].get("train_dataset", run["manifest"].get("dataset")) == "hoasa"
+        and run["manifest"].get("test_dataset", run["manifest"].get("dataset")) == "hoasa"
+        and run["manifest"].get("architecture") == "emcgcn"
+        and run["manifest"].get("encoder") in matrix["encoders"]
+        and run["manifest"].get("status") == "complete"
+        and run["metrics"] is not None
+        and run["metrics"].get("test", {}).get("triplet", {}).get("f1") is not None
+    ]
     grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for run in runs:
         manifest = run["manifest"]
@@ -220,6 +236,8 @@ def build_report(
         "",
         "Status: **independent replication**. Original per-seed artifacts and the full seed list were not recovered.",
         "",
+        f"Active run protocol: `{protocol_id}`. Every optimizer parameter group uses the configured learning rate of {matrix['training']['learning_rate']:.0e}.",
+        "",
         target_outcome,
         "",
         "The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome.",
@@ -230,9 +248,36 @@ def build_report(
         "",
         f"Declared seeds: `{', '.join(map(str, seeds))}`. Expected runs per cell: {len(seeds)}.",
         "",
+        "## Prior runs superseded by the optimizer-rate correction",
+        "",
+        "Earlier complete HoASA EMCGCN runs remain unchanged in their run folders. Their manifests show 2e-5 for Transformer parameters and 1e-3 for graph/classifier parameters because PyABSA 2.4.3 hard-codes the latter. The approved matrix specifies one 2e-5 learning rate, so those runs are retained as historical evidence and excluded from all active-protocol scores and target comparisons.",
+        "",
+        "| Encoder | Runs | Seed F1 values (%) | Historical mean (%) |",
+        "| --- | ---: | --- | ---: |",
+    ]
+    for encoder in matrix["encoders"]:
+        prior = sorted(
+            (run for run in superseded_baseline_runs if run["manifest"].get("encoder") == encoder),
+            key=lambda run: (int(run["manifest"]["seed"]), run["manifest"].get("run_id", "")),
+        )
+        scores = [
+            100.0 * float(run["metrics"]["test"]["triplet"]["f1"])
+            for run in prior
+        ]
+        score_text = ", ".join(
+            f"{run['manifest']['seed']}:{score:.2f}"
+            for run, score in zip(prior, scores)
+        ) or "—"
+        historical_mean = f"{statistics.mean(scores):.2f}" if scores else "—"
+        lines.append(f"| {encoder} | {len(scores)} | {score_text} | {historical_mean} |")
+
+    lines.extend(
+        [
+        "",
         "| Train → test | Architecture | Encoder | State | n | Seed F1 values | Mean | SD | Median | Min | Max | Chapter 5 target | Δ | Target status |",
         "| --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
-    ]
+        ]
+    )
     for train, test, architecture, encoder, stats, target in rows:
         display = train if train == test else f"{train} → {test}"
         score_text = ", ".join(

@@ -26,6 +26,12 @@ hashes before training. The test set does not determine this setting. PyABSA's
 pairwise graph refinement uses a memory-efficient decomposition of the same
 linear projection, keeping its weights and batch size unchanged.
 
+PyABSA 2.4.3 assigns a separate hard-coded `1e-3` learning rate to EMCGCN's
+graph and classifier parameters, even when `config.learning_rate` is set. The
+runner overrides every optimizer group's rate to the matrix value (`2e-5`).
+Run manifests identify this protocol; earlier runs using the framework default
+remain archived but are excluded from its aggregates.
+
 ## Source and readiness audits
 
 ```bash

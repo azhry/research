@@ -2,23 +2,36 @@
 
 Status: **independent replication**. Original per-seed artifacts and the full seed list were not recovered.
 
-**Chapter 5 target outcome: NOT MET (0/4 baseline means).**
+Active run protocol: `indonesian-aste-matrix-v2-uniform-learning-rate`. Every optimizer parameter group uses the configured learning rate of 2e-05.
+
+**Chapter 5 target outcome: NOT YET FULLY MEASURED.**
 
 The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome.
 
-On the same selected predictions, excluding implicit-aspect gold raises mean F1 by 6.50–7.11 points; 3/4 explicit-only means meet the historical references. Chapter 5 does not document whether its targets excluded implicit triplets, so this quantifies metric sensitivity without establishing exact comparability.
+Explicit-only sensitivity is not yet measurable for the Chapter 5 baseline cells.
 
 Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Attempt counts for the HoASA EMCGCN baseline are summarized below.
 
 Declared seeds: `0, 1, 2, 3, 52`. Expected runs per cell: 5.
 
+## Prior runs superseded by the optimizer-rate correction
+
+Earlier complete HoASA EMCGCN runs remain unchanged in their run folders. Their manifests show 2e-5 for Transformer parameters and 1e-3 for graph/classifier parameters because PyABSA 2.4.3 hard-codes the latter. The approved matrix specifies one 2e-5 learning rate, so those runs are retained as historical evidence and excluded from all active-protocol scores and target comparisons.
+
+| Encoder | Runs | Seed F1 values (%) | Historical mean (%) |
+| --- | ---: | --- | ---: |
+| mbert | 5 | 0:70.15, 1:71.26, 2:69.63, 3:71.73, 52:71.52 | 70.86 |
+| indobert | 5 | 0:71.92, 1:72.10, 2:71.50, 3:72.20, 52:71.58 | 71.86 |
+| xlmr | 5 | 0:71.63, 1:73.05, 2:72.78, 3:73.40, 52:73.12 | 72.80 |
+| deberta_absa | 5 | 0:69.05, 1:70.77, 2:68.48, 3:69.51, 52:70.54 | 69.67 |
+
 | Train → test | Architecture | Encoder | State | n | Seed F1 values | Mean | SD | Median | Min | Max | Chapter 5 target | Δ | Target status |
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| hoasa | emcgcn | mbert | complete | 5/5 | 0:70.15, 1:71.26, 2:69.63, 3:71.73, 52:71.52 | 70.86 | 0.92 | 71.26 | 69.63 | 71.73 | 75.72 | -4.86 | below |
-| hoasa | emcgcn | indobert | complete | 5/5 | 0:71.92, 1:72.10, 2:71.50, 3:72.20, 52:71.58 | 71.86 | 0.31 | 71.92 | 71.50 | 72.20 | 78.01 | -6.15 | below |
-| hoasa | emcgcn | xlmr | complete | 5/5 | 0:71.63, 1:73.05, 2:72.78, 3:73.40, 52:73.12 | 72.80 | 0.69 | 73.05 | 71.63 | 73.40 | 77.97 | -5.17 | below |
-| hoasa | emcgcn | deberta_absa | complete | 5/5 | 0:69.05, 1:70.77, 2:68.48, 3:69.51, 52:70.54 | 69.67 | 0.98 | 69.51 | 68.48 | 70.77 | 80.79 | -11.12 | below |
-| hoasa | ssgcn | mbert | smoke only; failed attempts | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
+| hoasa | emcgcn | mbert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
+| hoasa | emcgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 78.01 | — | not measured |
+| hoasa | emcgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 77.97 | — | not measured |
+| hoasa | emcgcn | deberta_absa | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 80.79 | — | not measured |
+| hoasa | ssgcn | mbert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | deberta_absa | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
@@ -39,10 +52,10 @@ The table separates the primary full-gold metric from explicit-only diagnostics.
 
 | Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ | F1 change when implicit gold is excluded |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| mbert | 75.72 | 70.86 | -4.86 | 77.68 | 1.96 | 6.82 |
-| indobert | 78.01 | 71.86 | -6.15 | 78.80 | 0.79 | 6.94 |
-| xlmr | 77.97 | 72.80 | -5.17 | 79.91 | 1.94 | 7.11 |
-| deberta_absa | 80.79 | 69.67 | -11.12 | 76.17 | -4.62 | 6.50 |
+| mbert | 75.72 | — | — | — | — | — |
+| indobert | 78.01 | — | — | — | — | — |
+| xlmr | 77.97 | — | — | — | — | — |
+| deberta_absa | 80.79 | — | — | — | — | — |
 
 ## HoASA EMCGCN attempt history
 
@@ -50,10 +63,10 @@ Complete seed runs contribute to the score table. Smoke, failed, and interrupted
 
 | Encoder | Complete seed runs | Smoke attempts | Failed attempts | Interrupted attempts |
 | --- | ---: | ---: | ---: | ---: |
-| mbert | 5/5 | 3 | 6 | 3 |
-| indobert | 5/5 | 0 | 0 | 0 |
-| xlmr | 5/5 | 0 | 1 | 0 |
-| deberta_absa | 5/5 | 0 | 2 | 0 |
+| mbert | 0/5 | 0 | 0 | 0 |
+| indobert | 0/5 | 0 | 0 | 0 |
+| xlmr | 0/5 | 0 | 0 | 0 |
+| deberta_absa | 0/5 | 0 | 0 | 0 |
 
 ## Secondary metrics
 
@@ -61,10 +74,10 @@ Each value is mean precision/recall/F1 (%) over complete seeds only. Explicit-on
 
 | Train → test | Architecture | Encoder | Explicit-only triplet P/R/F1 | Aspect P/R/F1 | Opinion P/R/F1 | POS P/R/F1 | NEU P/R/F1 | NEG P/R/F1 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| hoasa | emcgcn | mbert | 82.31/73.66/77.68 | 91.24/79.45/84.91 | 91.63/68.25/78.20 | 86.08/62.77/72.52 | 42.00/6.67/10.11 | 77.49/62.06/68.88 |
-| hoasa | emcgcn | indobert | 83.82/74.45/78.80 | 91.73/79.56/85.19 | 93.05/68.66/78.98 | 86.38/63.56/73.18 | 41.82/6.67/10.00 | 80.58/62.55/70.35 |
-| hoasa | emcgcn | xlmr | 86.02/74.62/79.91 | 93.24/79.32/85.72 | 94.42/67.98/79.04 | 89.36/63.53/74.26 | 26.67/4.44/7.33 | 81.60/62.97/71.06 |
-| hoasa | emcgcn | deberta_absa | 77.97/74.57/76.17 | 88.80/80.38/84.36 | 89.31/69.64/78.24 | 82.12/63.45/71.52 | 0.00/0.00/0.00 | 72.72/63.02/67.46 |
+| hoasa | emcgcn | mbert | — | — | — | — | — | — |
+| hoasa | emcgcn | indobert | — | — | — | — | — | — |
+| hoasa | emcgcn | xlmr | — | — | — | — | — | — |
+| hoasa | emcgcn | deberta_absa | — | — | — | — | — | — |
 | hoasa | ssgcn | mbert | — | — | — | — | — | — |
 | hoasa | ssgcn | indobert | — | — | — | — | — | — |
 | hoasa | ssgcn | xlmr | — | — | — | — | — | — |
