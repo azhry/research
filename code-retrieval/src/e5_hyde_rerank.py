@@ -40,7 +40,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v13-auditable-component-rrf"
+CODE_VERSION = "e5-hyde-rerank-v14-secondary-metrics"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_RRF_K = 60
 DEFAULT_HYDE_PROMPT = (
@@ -52,6 +52,24 @@ DEFAULT_HYDE_FALLBACK_PROMPTS = (
     "Write code for: {query}",
     "Give a Python example for: {query}",
 )
+
+
+def experiment_notebook_sha256(path: str | Path) -> str:
+    """Hash experiment cells while excluding tagged posthoc analysis cells."""
+
+    notebook = json.loads(Path(path).read_text(encoding="utf-8"))
+    cells = [
+        cell
+        for cell in notebook.get("cells", [])
+        if "posthoc-analysis" not in cell.get("metadata", {}).get("tags", [])
+    ]
+    payload = json.dumps(
+        cells,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 @dataclass(frozen=True)
@@ -583,6 +601,27 @@ def candidate_contract(rankings: Mapping[str, Mapping[str, float]]) -> dict[str,
     }
 
 
+def _per_query_metric_rows(
+    metrics: Mapping[str, Mapping[str, Any] | None],
+    *,
+    cache_identity: str,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for system_id, metric in metrics.items():
+        if metric is None:
+            continue
+        for query_id, values in metric.get("per_query", {}).items():
+            rows.append(
+                {
+                    "query_id": query_id,
+                    "system_id": system_id,
+                    **values,
+                    "cache_identity": cache_identity,
+                }
+            )
+    return rows
+
+
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -590,6 +629,14 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "system_id",
         "ndcg_at_10",
         "delta_vs_e5",
+        "map_at_10",
+        "delta_map_at_10",
+        "recall_at_10",
+        "delta_recall_at_10",
+        "precision_at_10",
+        "delta_precision_at_10",
+        "recall_at_1000",
+        "delta_recall_at_1000",
         "query_count",
         "corpus_count",
         "qrels_query_count",
@@ -600,6 +647,31 @@ def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
         "evaluation_order_policy",
         "status",
         "benchmark_evidence",
+    ]
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field) for field in fields})
+    temporary.replace(path)
+
+
+def _write_per_query_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    fields = [
+        "query_id",
+        "system_id",
+        "ndcg_at_10",
+        "map_at_10",
+        "recall_at_10",
+        "precision_at_10",
+        "recall_at_1000",
+        "first_relevant_rank",
+        "relevant_document_count",
+        "relevant_retrieved_at_10",
+        "relevant_retrieved_at_1000",
+        "cache_identity",
     ]
     with temporary.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fields)
@@ -628,28 +700,42 @@ def _result_rows(
     status: str,
 ) -> list[dict[str, Any]]:
     baseline_metric = metrics.get("e5")
-    baseline = None if baseline_metric is None else float(baseline_metric["ndcg_at_10"])
+    metric_names = (
+        "ndcg_at_10",
+        "map_at_10",
+        "recall_at_10",
+        "precision_at_10",
+        "recall_at_1000",
+    )
+    baseline_values = {
+        name: None if baseline_metric is None else float(baseline_metric[name])
+        for name in metric_names
+    }
     rows: list[dict[str, Any]] = []
     for system_id in SYSTEM_IDS:
         metric = metrics.get(system_id)
-        score = None if metric is None else float(metric["ndcg_at_10"])
-        rows.append(
-            {
-                "system_id": system_id,
-                "ndcg_at_10": score,
-                "delta_vs_e5": None if score is None or baseline is None else score - baseline,
-                "query_count": query_count,
-                "corpus_count": corpus_count,
-                "qrels_query_count": qrels_query_count,
-                "qrels_judgment_count": qrels_judgment_count,
-                "candidate_depth": candidate_depth,
-                "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
-                "evaluator_package": evaluator_package,
-                "evaluation_order_policy": RANKING_ORDER_POLICY,
-                "status": status,
-                "benchmark_evidence": status == "benchmark",
-            }
-        )
+        row: dict[str, Any] = {"system_id": system_id}
+        for metric_name in metric_names:
+            score = None if metric is None else float(metric[metric_name])
+            baseline = baseline_values[metric_name]
+            row[metric_name] = score
+            row[f"delta_{metric_name}"] = (
+                None if score is None or baseline is None else score - baseline
+            )
+        row.update({
+            "delta_vs_e5": row["delta_ndcg_at_10"],
+            "query_count": query_count,
+            "corpus_count": corpus_count,
+            "qrels_query_count": qrels_query_count,
+            "qrels_judgment_count": qrels_judgment_count,
+            "candidate_depth": candidate_depth,
+            "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
+            "evaluator_package": evaluator_package,
+            "evaluation_order_policy": RANKING_ORDER_POLICY,
+            "status": status,
+            "benchmark_evidence": status == "benchmark",
+        })
+        rows.append(row)
     return rows
 
 
@@ -664,6 +750,7 @@ def build_comparison_result(
     environment: Mapping[str, Any],
     timings: Mapping[str, float],
     notebook_sha256: str | None = None,
+    source_notebook_sha256: str | None = None,
     repo_root: Path | None = None,
     status: str | None = None,
     blocker: str | None = None,
@@ -699,6 +786,14 @@ def build_comparison_result(
     return {
         "system_ids": list(SYSTEM_IDS),
         "metric": "nDCG@10",
+        "reported_metrics": ["nDCG@10", "MAP@10", "Recall@10", "Recall@1000"],
+        "metric_notes": {
+            "map_at_10": "With one judged relevant item per query, MAP@10 equals MRR@10.",
+            "precision_at_10": "Not emphasized in the paper because with one relevant item per query P@10 equals Recall@10 divided by 10.",
+            "recall_at_10": "Fraction of queries with the judged relevant item in the top 10.",
+            "recall_at_1000": "Fraction of queries with the judged relevant item in the depth-1000 candidate set.",
+        },
+        "run_id": f"{time.strftime('%Y%m%dT%H%M%S', time.gmtime())}-{time.time_ns()}-{identity}-metrics-v1",
         "status": status,
         "benchmark_evidence": status == "benchmark",
         "results": rows,
@@ -777,9 +872,24 @@ def build_comparison_result(
         },
         "component_diagnostics": {
             system_id: {
-                "ndcg_at_10": float(metrics[system_id]["ndcg_at_10"]),
+                **{
+                    metric_name: float(metrics[system_id][metric_name])
+                    for metric_name in (
+                        "ndcg_at_10",
+                        "map_at_10",
+                        "recall_at_10",
+                        "precision_at_10",
+                        "recall_at_1000",
+                    )
+                },
                 "delta_vs_e5": float(metrics[system_id]["ndcg_at_10"])
                 - float(metrics["e5"]["ndcg_at_10"]),
+                "delta_map_at_10": float(metrics[system_id]["map_at_10"])
+                - float(metrics["e5"]["map_at_10"]),
+                "delta_recall_at_10": float(metrics[system_id]["recall_at_10"])
+                - float(metrics["e5"]["recall_at_10"]),
+                "delta_recall_at_1000": float(metrics[system_id]["recall_at_1000"])
+                - float(metrics["e5"]["recall_at_1000"]),
                 "ranking_method": "unfused_component_ranking",
             }
             for system_id in ("e5_hyde_raw", "e5_rerank_raw")
@@ -797,13 +907,16 @@ def build_comparison_result(
             "gpu_memory_captured": False,
             "latency_is_wall_clock_seconds": True,
         },
-        "notebook_sha256": notebook_sha256,
+        "notebook_sha256": source_notebook_sha256 or notebook_sha256,
+        "experiment_notebook_sha256": notebook_sha256,
         "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
         "evaluator_package": config.evaluator_package,
         "evaluation_order_policy": RANKING_ORDER_POLICY,
         "artifact_provenance": {
             "generated_at_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "source": "code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb",
+            "notebook_sha256": source_notebook_sha256 or notebook_sha256,
+            "experiment_notebook_sha256": notebook_sha256,
             "real_model_inference": real_model_inference,
             "synthetic_scores": False,
         },
@@ -817,6 +930,7 @@ def blocked_result(
     environment: Mapping[str, Any] | None = None,
     repo_root: Path | None = None,
     notebook_sha256: str | None = None,
+    source_notebook_sha256: str | None = None,
     real_model_inference: bool = False,
 ) -> dict[str, Any]:
     """Create a non-benchmark artifact with null scores and an exact blocker."""
@@ -838,6 +952,7 @@ def blocked_result(
         environment=dict(environment or {}),
         timings={},
         notebook_sha256=notebook_sha256,
+        source_notebook_sha256=source_notebook_sha256,
         repo_root=repo_root,
         status="blocked",
         blocker=blocker,
@@ -852,6 +967,7 @@ def write_comparison_artifacts(
     result: Mapping[str, Any],
     *,
     cache_metadata: Mapping[str, Any] | None = None,
+    per_query_metrics: Sequence[Mapping[str, Any]] = (),
 ) -> dict[str, str]:
     """Persist JSON, CSV, and metadata atomically below the configured artifact directory."""
 
@@ -861,16 +977,27 @@ def write_comparison_artifacts(
     comparison_path = artifact_dir / "comparison.csv"
     metadata_path = artifact_dir / "metadata.json"
     identity = str(result.get("cache_identity") or "unidentified")
-    run_dir = artifact_dir / "runs" / identity
+    run_id = str(result.get("run_id") or identity)
+    run_dir = artifact_dir / "runs" / run_id
     run_result_path = run_dir / "result.json"
     run_comparison_path = run_dir / "comparison.csv"
     run_metadata_path = run_dir / "metadata.json"
+    per_query_path = run_dir / "per_query_metrics.csv"
     metadata = {
         "result": dict(result),
         "cache_metadata": dict(cache_metadata or {}),
     }
     _json_write(run_result_path, dict(result))
     _write_csv(run_comparison_path, list(result.get("results", [])))
+    if per_query_metrics:
+        _write_per_query_csv(per_query_path, per_query_metrics)
+        metadata["artifacts"] = {
+            "per_query_metrics": {
+                "path": str(per_query_path),
+                "sha256": hashlib.sha256(per_query_path.read_bytes()).hexdigest(),
+                "row_count": len(per_query_metrics),
+            }
+        }
     _json_write(run_metadata_path, metadata)
     _json_write(result_path, dict(result))
     _write_csv(comparison_path, list(result.get("results", [])))
@@ -882,6 +1009,8 @@ def write_comparison_artifacts(
         "run_result": str(run_result_path),
         "run_comparison": str(run_comparison_path),
         "run_metadata": str(run_metadata_path),
+        "run_dir": str(run_dir),
+        "per_query_metrics": str(per_query_path) if per_query_metrics else "",
     }
 
 
@@ -926,6 +1055,7 @@ def run_experiment(
     *,
     repo_root: Path,
     notebook_sha256: str | None = None,
+    source_notebook_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, str]]:
     """Run all four systems with real model inference and write their artifacts."""
 
@@ -1137,6 +1267,7 @@ def run_experiment(
         environment=environment,
         timings=timings,
         notebook_sha256=notebook_sha256,
+        source_notebook_sha256=source_notebook_sha256,
         repo_root=repo_root,
     )
     result["candidate_contract"] = {
@@ -1162,6 +1293,10 @@ def run_experiment(
     artifacts = write_comparison_artifacts(
         config,
         result,
+        per_query_metrics=_per_query_metric_rows(
+            metric_by_system,
+            cache_identity=identity,
+        ),
         cache_metadata={
             "corpus": corpus_meta,
             "original_queries": original_query_meta,

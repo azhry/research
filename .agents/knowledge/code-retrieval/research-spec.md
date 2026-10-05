@@ -34,9 +34,18 @@ answers, or target documents.
 
 ## Primary result
 
-Report aggregated `nDCG@10` for all four systems, absolute and delta versus E5,
-query count/exclusions, candidate and re-ranking depth, and whether the official
-COIR evaluator completed successfully. Latency and memory are secondary observations.
+Report aggregated `nDCG@10` for all four systems as the primary metric. Also
+report `MAP@10`, `Recall@10`, and `Recall@1000` from the same ordered rankings
+and qrels. The held-out CosQA qrels contain one positive judgment per query, so
+`MAP@10` equals `MRR@10`, `Recall@10` is the top-10 hit rate, and
+`Recall@1000` measures candidate coverage. Do not emphasize `Precision@10`,
+which is `Recall@10 / 10` under this qrels structure.
+
+Include paired query-bootstrap intervals for metric differences versus E5,
+with the replicate count, seed, and multiple-comparison caveat. Report absolute
+scores and deltas, query count/exclusions, candidate and re-ranking depth, and
+whether the official COIR evaluator completed successfully. Latency and memory
+are secondary observations.
 
 Keep split, corpus snapshot, preprocessing, model revisions, prefixes, truncation,
 candidate depth, evaluator, and seed fixed unless an exploratory run explicitly

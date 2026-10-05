@@ -25,9 +25,9 @@ only the explicitly requested experimental variable.
   fixed. The transformation may change only the query representation.
 - **Re-ranker parameters:** model identifier/revision, input formatting, maximum
   length, score direction, candidate depth, and tie-breaking must remain fixed.
-- **Evaluation:** evaluator implementation and package version, metric and cutoff
-  (for this study, COIR `nDCG@10`), qrels interpretation, aggregation, and
-  relevance judgments must be identical.
+- **Evaluation:** evaluator implementation and package version, metric cutoffs
+  (COIR `nDCG@10`, `MAP@10`, `Recall@10`, and `Recall@1000`), qrels
+  interpretation, aggregation, and relevance judgments must be identical.
 - **Execution controls:** seed, deterministic settings, precision, dependency
   versions, CPU/GPU details, and thread counts should remain fixed and must be
   recorded. Batch size may be changed only when it is proven not to alter model
@@ -71,10 +71,11 @@ configuration or cache problem is resolved.
 ### Reporting rules
 
 Report the complete system matrix, not only the best variant: the unchanged
-baseline, each individual component, and the combined system. Include the absolute
-score and absolute delta versus the baseline, plus query/corpus counts, candidate
-and re-ranking depth, evaluator/version, and evidence level. Do not use a relative
-percentage alone as the comparison.
+baseline, each individual component, and the combined system. Include absolute
+scores and absolute deltas versus E5 for the primary and reported secondary
+metrics, plus query/corpus counts, candidate and re-ranking depth,
+evaluator/version, and evidence level. Do not use a relative percentage alone
+as the comparison.
 
 If any control differs, label the run exploratory or create a new baseline; do not
 call it a direct rerun. Never use synthetic scores, mocked model calls, partial
@@ -90,10 +91,13 @@ retrieval artifacts also preserve a deterministic order for equal-score
 documents, so evaluating raw similarities could report a different metric from
 an RRF ranking built from that same order. The primary evaluator now sorts by
 descending source score with saved insertion order as the tie-break, assigns
-unique ordinal scores, then calls the pinned COIR evaluator. This makes a
-one-source RRF exactly match the source ranking and keeps every system's metric
-based on its recorded order. Older raw-score metrics must be labeled with their
-tie policy before comparing them to current results.
+unique ordinal scores, then calls the pinned COIR evaluator at cutoffs 10 and
+1,000. This makes a one-source RRF exactly match the source ranking and keeps
+every system's metrics based on its recorded order. The test qrels have one
+positive judgment per query: `MAP@10` therefore equals `MRR@10`, `Recall@10` is
+the hit rate, and `Recall@1000` is candidate coverage. `Precision@10` is
+redundant with `Recall@10` and is not emphasized. Older raw-score metrics must
+be labeled with their tie policy before comparing them to current results.
 
 ## Validation and method selection
 
