@@ -11,6 +11,7 @@ import hashlib
 import importlib
 import importlib.metadata
 import json
+import math
 import os
 import platform
 import random
@@ -659,7 +660,7 @@ def evaluate_ndcg_at_10(
     *,
     cutoff: int = 10,
 ) -> dict[str, Any]:
-    """Evaluate each saved ranking order with the official COIR evaluator.
+    """Evaluate saved ranking order at 10 and candidate depth 1,000 with COIR.
 
     COIR delegates to pytrec_eval, which treats documents with equal scores as
     tied. Retrieval artifacts also carry a deterministic order for equal-score
@@ -669,7 +670,7 @@ def evaluate_ndcg_at_10(
     """
 
     if cutoff != 10:
-        raise ValueError("this baseline's primary evaluator cutoff is fixed at 10")
+        raise ValueError("the primary evaluator cutoff is fixed at 10")
     try:
         evaluator_module = importlib.import_module("coir.beir.retrieval.evaluation")
         evaluator = evaluator_module.EvaluateRetrieval
@@ -683,30 +684,117 @@ def evaluate_ndcg_at_10(
     # comparable to the same first-stage ranking. The COIR evaluator may remove
     # identical query/document IDs in-place, so keep these copies separate from
     # the cached retrieval output.
+    ordered_rankings: dict[str, list[str]] = {}
     safe_rankings: dict[str, dict[str, float]] = {}
-    for query_id, scores in rankings.items():
+    rankings_by_query = {str(query_id): scores for query_id, scores in rankings.items()}
+    for query_id in qrels:
+        scores = rankings_by_query.get(str(query_id))
+        if scores is None:
+            raise ValueError(f"ranking is missing qrels query {query_id!r}")
         ordered = sorted(scores.items(), key=lambda item: -float(item[1]))
-        safe_rankings[query_id] = {
-            document_id: float(len(ordered) - rank)
+        ordered_rankings[str(query_id)] = [str(document_id) for document_id, _ in ordered]
+        safe_rankings[str(query_id)] = {
+            str(document_id): float(len(ordered) - rank)
             for rank, (document_id, _) in enumerate(ordered)
         }
     ndcg, average_precision, recall, precision = evaluator.evaluate(
         {query_id: dict(scores) for query_id, scores in qrels.items()},
         safe_rankings,
-        [cutoff],
+        [cutoff, 1000],
     )
     key = f"NDCG@{cutoff}"
     if key not in ndcg:
         raise RuntimeError(f"COIR evaluator did not return {key}: {ndcg}")
-    return {
+
+    per_query: dict[str, dict[str, Any]] = {}
+    metric_values: dict[str, dict[str, float]] = {
+        "ndcg_at_10": {},
+        "map_at_10": {},
+        "recall_at_10": {},
+        "precision_at_10": {},
+        "recall_at_1000": {},
+    }
+    for raw_query_id, judgments in qrels.items():
+        query_id = str(raw_query_id)
+        relevant = {
+            str(document_id): int(grade)
+            for document_id, grade in judgments.items()
+            if int(grade) > 0
+        }
+        ranking = ordered_rankings[query_id]
+        rank_by_document = {document_id: rank for rank, document_id in enumerate(ranking, 1)}
+        relevant_ranks = sorted(
+            rank_by_document[document_id]
+            for document_id in relevant
+            if document_id in rank_by_document
+        )
+        retrieved_at_10 = sum(rank <= 10 for rank in relevant_ranks)
+        retrieved_at_1000 = sum(rank <= 1000 for rank in relevant_ranks)
+        map_at_10 = (
+            sum(
+                sum(previous_rank <= rank for previous_rank in relevant_ranks) / rank
+                for rank in relevant_ranks
+                if rank <= 10
+            )
+            / len(relevant)
+            if relevant
+            else 0.0
+        )
+        dcg_at_10 = sum(
+            (2**relevant[document_id] - 1) / math.log2(rank_by_document[document_id] + 1)
+            for document_id in relevant
+            if document_id in rank_by_document and rank_by_document[document_id] <= 10
+        )
+        ideal_grades = sorted(relevant.values(), reverse=True)[:10]
+        ideal_dcg_at_10 = sum(
+            (2**grade - 1) / math.log2(rank + 1)
+            for rank, grade in enumerate(ideal_grades, 1)
+        )
+        values = {
+            "ndcg_at_10": dcg_at_10 / ideal_dcg_at_10 if ideal_dcg_at_10 else 0.0,
+            "map_at_10": map_at_10,
+            "recall_at_10": retrieved_at_10 / len(relevant) if relevant else 0.0,
+            "precision_at_10": retrieved_at_10 / 10,
+            "recall_at_1000": retrieved_at_1000 / len(relevant) if relevant else 0.0,
+        }
+        metric_values["ndcg_at_10"][query_id] = values["ndcg_at_10"]
+        metric_values["map_at_10"][query_id] = values["map_at_10"]
+        metric_values["recall_at_10"][query_id] = values["recall_at_10"]
+        metric_values["precision_at_10"][query_id] = values["precision_at_10"]
+        metric_values["recall_at_1000"][query_id] = values["recall_at_1000"]
+        per_query[query_id] = {
+            **values,
+            "first_relevant_rank": relevant_ranks[0] if relevant_ranks else None,
+            "relevant_document_count": len(relevant),
+            "relevant_retrieved_at_10": retrieved_at_10,
+            "relevant_retrieved_at_1000": retrieved_at_1000,
+        }
+
+    official_values = {
         "ndcg_at_10": float(ndcg[key]),
+        "map_at_10": float(average_precision[f"MAP@{cutoff}"]),
+        "recall_at_10": float(recall[f"Recall@{cutoff}"]),
+        "precision_at_10": float(precision[f"P@{cutoff}"]),
+        "recall_at_1000": float(recall["Recall@1000"]),
+    }
+    for metric_name, query_values in metric_values.items():
+        manual_mean = float(np.mean(list(query_values.values()))) if query_values else 0.0
+        if round(manual_mean, 5) != round(official_values[metric_name], 5):
+            raise RuntimeError(
+                f"Per-query {metric_name} mean {manual_mean:.8f} does not match "
+                f"the rounded COIR aggregate {official_values[metric_name]:.5f}"
+            )
+    return {
+        **official_values,
         "ndcg": ndcg,
         "map": average_precision,
         "recall": recall,
         "precision": precision,
+        "per_query": per_query,
         "evaluator": "coir.beir.retrieval.evaluation.EvaluateRetrieval",
         "evaluator_package": "coir-eval==0.7.0",
         "cutoff": cutoff,
+        "candidate_cutoff": 1000,
         "ranking_order_policy": RANKING_ORDER_POLICY,
     }
 
