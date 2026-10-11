@@ -484,12 +484,10 @@ def build_pyabsa_training_classes(
             optimizer = getattr(self, "optimizer", None)
             if optimizer is None:
                 raise RuntimeError("PyABSA did not initialize its optimizer before training")
-            # PyABSA 2.4.3 hard-codes 1e-3 for EMCGCN's non-Transformer
-            # parameter groups, even when config.learning_rate is set. The
-            # approved experiment matrix specifies one AdamW learning rate.
+            # PyABSA 2.4.3 intentionally uses config.learning_rate for the two
+            # Transformer groups and 1e-3 for the graph/classifier groups.
+            # Preserve this native schedule and guard against dependency drift.
             configured_learning_rate = float(self.config.learning_rate)
-            for group in optimizer.param_groups:
-                group["lr"] = configured_learning_rate
             observer["optimizer_groups"] = [
                 {
                     "learning_rate": float(group["lr"]),
@@ -499,11 +497,23 @@ def build_pyabsa_training_classes(
                 }
                 for group in optimizer.param_groups
             ]
-            if any(
-                group["learning_rate"] != configured_learning_rate
-                for group in observer["optimizer_groups"]
+            expected_learning_rates = [
+                configured_learning_rate,
+                configured_learning_rate,
+                1e-3,
+                1e-3,
+            ]
+            actual_learning_rates = [
+                group["learning_rate"] for group in observer["optimizer_groups"]
+            ]
+            if len(actual_learning_rates) != len(expected_learning_rates) or any(
+                abs(actual - expected) > 1e-12
+                for actual, expected in zip(actual_learning_rates, expected_learning_rates)
             ):
-                raise RuntimeError("optimizer parameter groups do not honor the configured learning rate")
+                raise RuntimeError(
+                    "PyABSA 2.4.3 EMCGCN optimizer groups changed: expected native "
+                    f"learning rates {expected_learning_rates}, found {actual_learning_rates}"
+                )
 
         def _load_dataset_and_prepare_dataloader(self):
             self.tokenizer = PretrainedTokenizer(self.config)

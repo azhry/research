@@ -27,11 +27,10 @@ pairwise graph refinement uses a memory-efficient decomposition of the same
 linear projection, keeping its weights and batch size unchanged.
 
 PyABSA 2.4.3's default EMCGCN optimizer uses `2e-5` for Transformer parameters
-and `1e-3` for graph and classifier parameters. This experiment matrix
-explicitly uses `2e-5` for every group as a separate uniform-rate condition.
-Run manifests identify the schedule; the completed PyABSA-default runs remain
-archived and are reported separately rather than pooled with the uniform-rate
-results.
+and `1e-3` for graph and classifier parameters. The active matrix preserves
+those native groups. A superseded uniform-rate protocol applied `2e-5` to every
+group by mistake; its completed runs remain archived and are reported separately
+from the active protocol. Run manifests record each resolved group rate.
 
 ## Source and readiness audits
 

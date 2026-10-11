@@ -27,6 +27,14 @@ specification rather than defining the whole knowledge area.
   affect interpretation. Do not use synthetic or model-generated annotations
   as human gold evidence.
 
+## Optimizer configuration
+
+Check the pinned library's optimizer construction before assuming that a single
+configuration learning-rate field applies to every parameter group. In
+PyABSA 2.4.3 EMCGCN, `config.learning_rate` is used for Transformer groups while
+graph and classifier groups use `1e-3`. Preserve and record the resolved group
+rates unless the study protocol explicitly specifies another schedule.
+
 ## Dataset boundaries
 
 Preserve each corpus's annotation semantics through preprocessing and scoring.

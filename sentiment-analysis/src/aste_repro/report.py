@@ -122,6 +122,21 @@ def _format_prf(value: dict[str, float] | None) -> str:
     return "/".join(f"{100.0 * value[name]:.2f}" for name in ("precision", "recall", "f1"))
 
 
+def _optimizer_learning_rates(run: dict[str, Any]) -> list[float]:
+    resolved = run["manifest"].get("resolved_config", {})
+    groups = resolved.get("pyabsa", {}).get("optimizer_groups", [])
+    try:
+        return [float(group["learning_rate"]) for group in groups]
+    except (TypeError, KeyError, ValueError):
+        return []
+
+
+def _rates_match(actual: list[float], expected: list[float]) -> bool:
+    return len(actual) == len(expected) and all(
+        abs(left - right) <= 1e-12 for left, right in zip(actual, expected)
+    )
+
+
 def build_report(
     runs_dir: Path = DEFAULT_RUNS,
     matrix_path: Path = MATRIX_PATH,
@@ -130,22 +145,42 @@ def build_report(
     matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
     title = title or matrix.get("study", "Sentiment Analysis")
     protocol_id = matrix["experiment_protocol_id"]
+    uniform_history = matrix.get("historical_protocols", {}).get("uniform_optimizer_groups", {})
+    uniform_protocol_id = uniform_history.get("id")
+    uniform_protocol_label = uniform_history.get("label", "superseded uniform-rate protocol")
     seeds = [int(seed) for seed in matrix["seed_protocol"]["seeds"]]
     all_runs = _load_runs(runs_dir) if runs_dir.exists() else []
     runs = [
         run for run in all_runs
         if run["manifest"].get("experiment_protocol_id") == protocol_id
     ]
-    prior_baseline_runs = [
+    baseline_scope = [
         run for run in all_runs
         if run["manifest"].get("experiment_protocol_id") != protocol_id
         and run["manifest"].get("train_dataset", run["manifest"].get("dataset")) == "hoasa"
         and run["manifest"].get("test_dataset", run["manifest"].get("dataset")) == "hoasa"
         and run["manifest"].get("architecture") == "emcgcn"
         and run["manifest"].get("encoder") in matrix["encoders"]
-        and run["manifest"].get("status") == "complete"
+    ]
+    baseline_candidates = [
+        run for run in baseline_scope
+        if run["manifest"].get("status") == "complete"
         and run["metrics"] is not None
         and run["metrics"].get("test", {}).get("triplet", {}).get("f1") is not None
+    ]
+    configured_lr = float(matrix["training"]["learning_rate"])
+    native_group_rates = [configured_lr, configured_lr, 1e-3, 1e-3]
+    native_schedule_runs = [
+        run for run in baseline_candidates
+        if _rates_match(_optimizer_learning_rates(run), native_group_rates)
+    ]
+    native_schedule_attempts = [
+        run for run in baseline_scope
+        if _rates_match(_optimizer_learning_rates(run), native_group_rates)
+    ]
+    uniform_schedule_runs = [
+        run for run in baseline_candidates
+        if _rates_match(_optimizer_learning_rates(run), [configured_lr] * 4)
     ]
     grouped: dict[tuple[str, str, str, str], list[dict[str, Any]]] = defaultdict(list)
     for run in runs:
@@ -229,14 +264,14 @@ def build_report(
             "Chapter 5 does not document whether its targets excluded implicit triplets, so this quantifies metric sensitivity without establishing exact comparability."
         )
     else:
-        implicit_sensitivity = "Explicit-only sensitivity is not yet measurable under the active uniform-rate protocol. Archived runs with PyABSA's default optimizer schedule are shown separately below and do not establish a match to the Chapter 5 targets."
+        implicit_sensitivity = "The active native-group protocol has no complete runs yet, so its implicit-aspect sensitivity is not measured. Completed native-group and superseded uniform-rate runs are summarized separately below."
 
     lines = [
         f"# {title} results",
         "",
         "Status: **independent replication**. Original per-seed artifacts and the full seed list were not recovered.",
         "",
-        f"Active run protocol: `{protocol_id}`. Every optimizer parameter group uses the configured learning rate of {matrix['training']['learning_rate']:.0e}.",
+        f"Active run protocol: `{protocol_id}`. {matrix['training']['learning_rate_policy']}",
         "",
         target_outcome,
         "",
@@ -244,55 +279,63 @@ def build_report(
         "",
         implicit_sensitivity,
         "",
+        "## Optimizer schedule correction",
+        "",
+        "Source inspection of pinned PyABSA 2.4.3 shows that `config.learning_rate=2e-5` is used for the two Transformer parameter groups; its EMCGCN instructor separately assigns `1e-3` to both graph/classifier groups. A superseded adapter incorrectly forced all four groups to `2e-5`. In matched mBERT seed-0 runs with the same data hashes, model revision, seed, and sequence length, native rates measured 70.15 full-gold F1 / 76.76 explicit-only F1, while the uniform-rate run measured 67.51 / 73.69. The native schedule is restored in the active code and configuration. Across the five-seed native-rate history, all four full-gold means remain below the Chapter 5 references; only three of four explicit-only means meet them, and that secondary metric does not establish exact reproduction. Completed uniform-rate runs remain historical evidence under their original protocol and are not pooled with the active protocol.",
+        "",
         "Scores are exact test triplet micro-F1 percentages. Only run manifests marked `complete` contribute; smoke, partial, blocked, failed, interrupted, or absent runs never become scores. Attempt counts for the HoASA EMCGCN baseline are summarized below.",
         "",
         f"Declared seeds: `{', '.join(map(str, seeds))}`. Expected runs per cell: {len(seeds)}.",
         "",
-        "## Earlier complete runs with PyABSA's default optimizer groups",
+        "## Completed historical optimizer schedules",
         "",
-        "These complete runs used PyABSA 2.4.3's optimizer groups: 2e-5 for Transformer parameters and 1e-3 for graph/classifier parameters. The Chapter 5 configuration table lists `learning_rate=2e-5` but does not say whether the graph groups were overridden. The active protocol explicitly uses 2e-5 for every group, so the two schedules are reported separately and are not pooled. The earlier runs remain measured evidence under their recorded settings.",
+        "The native-rate history contains 20 complete measured runs (five per encoder) but predates explicit protocol IDs; its manifests record the expected group rates and all runs remain under their original identities. Those full-gold means are below all four Chapter 5 references. The second schedule is the completed uniform-rate protocol, now superseded because its adapter overrode PyABSA's graph/classifier rates. Neither historical schedule is relabeled as an active-protocol run. No duplicate 20-run queue was started during this correction; the active v3 rows remain `not run` until runs with that protocol ID are deliberately collected.",
         "",
         "The explicit-only scores below use the same predictions and exclude implicit-aspect triplets from the gold denominator. Chapter 5 does not document its implicit-label policy, and it selects the best test-set epoch while this replication selects on validation. These figures are sensitivity diagnostics, not evidence that a target has been reproduced.",
         "",
-        "| Encoder | Runs | Full-gold seed F1 (%) | Full-gold mean | Explicit-only seed F1 (%) | Explicit-only mean | Chapter 5 reference | Diagnostic Δ vs reference |",
-        "| --- | ---: | --- | ---: | --- | ---: | ---: | ---: |",
+        "| Schedule | Encoder | Runs | Full-gold seed F1 (%) | Full-gold mean | Explicit-only seed F1 (%) | Explicit-only mean | Chapter 5 reference | Full-gold Δ | Explicit-only Δ |",
+        "| --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: |",
     ]
-    for encoder in matrix["encoders"]:
-        prior = sorted(
-            (run for run in prior_baseline_runs if run["manifest"].get("encoder") == encoder),
-            key=lambda run: (int(run["manifest"]["seed"]), run["manifest"].get("run_id", "")),
-        )
-        scores = [
-            100.0 * float(run["metrics"]["test"]["triplet"]["f1"])
-            for run in prior
-        ]
-        explicit_scores = [
-            100.0 * float(run["metrics"]["test_explicit_aspects_only"]["triplet"]["f1"])
-            for run in prior
-            if run["metrics"].get("test_explicit_aspects_only", {}).get("triplet", {}).get("f1") is not None
-        ]
-        score_text = ", ".join(
-            f"{run['manifest']['seed']}:{score:.2f}"
-            for run, score in zip(prior, scores)
-        ) or "—"
-        historical_mean = f"{statistics.mean(scores):.2f}" if scores else "—"
-        explicit_score_text = ", ".join(
-            f"{run['manifest']['seed']}:{100.0 * float(run['metrics']['test_explicit_aspects_only']['triplet']['f1']):.2f}"
-            for run in prior
-            if run["metrics"].get("test_explicit_aspects_only", {}).get("triplet", {}).get("f1") is not None
-        ) or "—"
-        explicit_mean = f"{statistics.mean(explicit_scores):.2f}" if explicit_scores else "—"
-        target = matrix["encoders"][encoder].get("target_mean_triplet_f1")
-        explicit_delta = (
-            f"{statistics.mean(explicit_scores) - float(target):+.2f}"
-            if explicit_scores and target is not None
-            else "—"
-        )
-        target_text = f"{float(target):.2f}" if target is not None else "—"
-        lines.append(
-            f"| {encoder} | {len(scores)} | {score_text} | {historical_mean} | "
-            f"{explicit_score_text} | {explicit_mean} | {target_text} | {explicit_delta} |"
-        )
+    for schedule_name, schedule_runs in (
+        ("Native PyABSA groups", native_schedule_runs),
+        ("Superseded uniform groups", uniform_schedule_runs),
+    ):
+        for encoder in matrix["encoders"]:
+            prior = sorted(
+                (run for run in schedule_runs if run["manifest"].get("encoder") == encoder),
+                key=lambda run: (int(run["manifest"]["seed"]), run["manifest"].get("run_id", "")),
+            )
+            scores = [
+                100.0 * float(run["metrics"]["test"]["triplet"]["f1"])
+                for run in prior
+            ]
+            explicit_by_run = [
+                (run, 100.0 * float(run["metrics"]["test_explicit_aspects_only"]["triplet"]["f1"]))
+                for run in prior
+                if run["metrics"].get("test_explicit_aspects_only", {}).get("triplet", {}).get("f1") is not None
+            ]
+            explicit_scores = [score for _run, score in explicit_by_run]
+            seed_scores = ", ".join(
+                f"{run['manifest']['seed']}:{score:.2f}"
+                for run, score in zip(prior, scores)
+            ) or "—"
+            explicit_seed_scores = ", ".join(
+                f"{run['manifest']['seed']}:{score:.2f}"
+                for run, score in explicit_by_run
+            ) or "—"
+            full_mean = statistics.mean(scores) if scores else None
+            explicit_mean = statistics.mean(explicit_scores) if explicit_scores else None
+            target = matrix["encoders"][encoder].get("target_mean_triplet_f1")
+            target_text = f"{float(target):.2f}" if target is not None else "—"
+            full_delta = f"{full_mean - float(target):+.2f}" if full_mean is not None and target is not None else "—"
+            explicit_delta = f"{explicit_mean - float(target):+.2f}" if explicit_mean is not None and target is not None else "—"
+            full_mean_text = f"{full_mean:.2f}" if full_mean is not None else "—"
+            explicit_mean_text = f"{explicit_mean:.2f}" if explicit_mean is not None else "—"
+            lines.append(
+                f"| {schedule_name} | {encoder} | {len(scores)} | {seed_scores} | {full_mean_text} | "
+                f"{explicit_seed_scores} | {explicit_mean_text} | {target_text} | "
+                f"{full_delta} | {explicit_delta} |"
+            )
 
     lines.extend(
         [
@@ -333,7 +376,7 @@ def build_report(
             "",
             "## Chapter 5 reference diagnostics",
             "",
-            "The table separates the primary full-gold metric from explicit-only diagnostics. The latter exclude implicit-aspect triplets and are not used to declare the Chapter 5 target met.",
+            "These rows refer only to the active native-group protocol. It has no complete runs yet; completed measurements under the historical schedules are shown above. The primary full-gold metric retains implicit-aspect triplets; explicit-only diagnostics do not establish that a Chapter 5 target was reproduced.",
             "",
             "| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ | F1 change when implicit gold is excluded |",
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
@@ -363,6 +406,102 @@ def build_report(
             f"| {encoder} | {stats['n']}/{stats['expected']} | {stats['smoke_runs']} | "
             f"{stats['failed_runs']} | {stats['interrupted_runs']} |"
         )
+
+    superseded_attempts = [
+        run for run in all_runs
+        if uniform_protocol_id
+        and run["manifest"].get("experiment_protocol_id") == uniform_protocol_id
+        and run["manifest"].get("train_dataset", run["manifest"].get("dataset")) == "hoasa"
+        and run["manifest"].get("test_dataset", run["manifest"].get("dataset")) == "hoasa"
+        and run["manifest"].get("architecture") == "emcgcn"
+        and run["manifest"].get("encoder") in matrix["encoders"]
+    ]
+    if superseded_attempts:
+        lines.extend(
+            [
+                "",
+                "## Superseded uniform-rate attempt history",
+                "",
+                f"The {uniform_protocol_label} queue ended with all 20 declared seed conditions complete and no queue-level failures. Earlier failed and interrupted attempts remain in the run archive and are not scores.",
+                "",
+                "| Encoder | Complete runs | Failed attempts | Interrupted attempts |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for encoder in matrix["encoders"]:
+            attempts = [
+                run for run in superseded_attempts
+                if run["manifest"].get("encoder") == encoder
+            ]
+            complete_count = sum(run["manifest"].get("status") == "complete" for run in attempts)
+            failed_count = sum(run["manifest"].get("status") == "failed" for run in attempts)
+            interrupted_count = sum(run["manifest"].get("status") == "interrupted" for run in attempts)
+            lines.append(
+                f"| {encoder} | {complete_count}/{len(seeds)} | {failed_count} | {interrupted_count} |"
+            )
+
+    if native_schedule_attempts:
+        lines.extend(
+            [
+                "",
+                "## Historical native-rate attempt history",
+                "",
+                "These unprotocolized manifests record the native group rates. Only complete runs with metrics contribute to the historical score table; smoke, failed, and interrupted attempts remain excluded.",
+                "",
+                "| Encoder | Complete runs | Failed attempts | Interrupted attempts | Smoke attempts |",
+                "| --- | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for encoder in matrix["encoders"]:
+            attempts = [
+                run for run in native_schedule_attempts
+                if run["manifest"].get("encoder") == encoder
+            ]
+            complete_count = sum(
+                run["manifest"].get("status") == "complete"
+                and run["metrics"] is not None
+                and run["metrics"].get("test", {}).get("triplet", {}).get("f1") is not None
+                for run in attempts
+            )
+            failed_count = sum(run["manifest"].get("status") == "failed" for run in attempts)
+            interrupted_count = sum(run["manifest"].get("status") == "interrupted" for run in attempts)
+            smoke_count = sum(run["manifest"].get("status") == "smoke" for run in attempts)
+            lines.append(
+                f"| {encoder} | {complete_count}/{len(seeds)} | {failed_count} | "
+                f"{interrupted_count} | {smoke_count} |"
+            )
+
+    unclassified_attempts = [
+        run for run in all_runs
+        if not run["manifest"].get("experiment_protocol_id")
+        and run["manifest"].get("train_dataset", run["manifest"].get("dataset")) == "hoasa"
+        and run["manifest"].get("test_dataset", run["manifest"].get("dataset")) == "hoasa"
+        and run["manifest"].get("architecture") == "emcgcn"
+        and run["manifest"].get("encoder") in matrix["encoders"]
+        and run["manifest"].get("status") in {"failed", "interrupted", "smoke"}
+        and not _optimizer_learning_rates(run)
+    ]
+    if unclassified_attempts:
+        lines.extend(
+            [
+                "",
+                "## Unprotocolized attempts without optimizer metadata",
+                "",
+                "These older failed, interrupted, or smoke manifests do not record resolved optimizer groups, so they cannot be assigned to either schedule and contribute no scores. They remain in the run archive.",
+                "",
+                "| Encoder | Failed | Interrupted | Smoke |",
+                "| --- | ---: | ---: | ---: |",
+            ]
+        )
+        for encoder in matrix["encoders"]:
+            attempts = [
+                run for run in unclassified_attempts
+                if run["manifest"].get("encoder") == encoder
+            ]
+            failed_count = sum(run["manifest"].get("status") == "failed" for run in attempts)
+            interrupted_count = sum(run["manifest"].get("status") == "interrupted" for run in attempts)
+            smoke_count = sum(run["manifest"].get("status") == "smoke" for run in attempts)
+            lines.append(f"| {encoder} | {failed_count} | {interrupted_count} | {smoke_count} |")
 
     lines.extend(
         [
