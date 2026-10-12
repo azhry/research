@@ -76,15 +76,18 @@ directory's `result.json` and `metadata.json` show the latest run.
 `notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
 comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
 HyDE + re-ranking. It uses the same CosQA data, paper-faithful E5
-`IndexFlatIP` retrieval at candidate depth 1,000, qrels, and `nDCG@10`
-evaluator for every row. HyDE uses the pinned `google/flan-t5-base` generator
+`IndexFlatIP` retrieval at candidate depth 1,000, qrels, and the pinned COIR
+evaluator for every row. `nDCG@10` remains primary; the run also reports
+`MAP@10`, `Recall@10`, and `Recall@1000`. HyDE uses the pinned `google/flan-t5-base` generator
 and keeps the original programming question alongside its hypothesis. The
 cross-encoder ranking is fused with E5 rather than replacing it. Fusion weights
 are selected on the complete `valid` qrels split, recorded with the run, and
 applied once to held-out `test`. Raw component scores remain diagnostics. The
 combined row fuses the selected E5+HyDE and E5+reranker rankings. Resolved model
-revisions, fusion controls, and component rankings are saved with each run.
-Smoke output is wiring evidence only.
+revisions, fusion controls, component rankings, aggregate metrics, and a
+per-query metric export are saved with each run. The notebook adds paired
+20,000-replicate query-bootstrap intervals for secondary-metric differences;
+smoke output is wiring evidence only.
 
 ```bash
 E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --output-dir artifacts/e5_hyde_rerank
