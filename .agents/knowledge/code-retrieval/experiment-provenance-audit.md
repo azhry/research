@@ -1,6 +1,6 @@
 # AZH-525: Submitted experiment provenance and evaluation splits
 
-Audit date: 2026-10-13
+Audit date: 2026-10-13; reviewer verdict mapping added 2026-10-14
 Study: CoIR-Retrieval/CosQA with E5, HyDE, and cross-encoder reranking
 Scope: retrospective inspection of the existing pinned data, selection artifacts, saved runs, evaluator source, and paper revisions. No model inference, benchmark rerun, PDF rebuild, or test suite was run.
 
@@ -24,6 +24,33 @@ Scope: retrospective inspection of the existing pinned data, selection artifacts
 | Exact submitted paper | Revision snapshots, local PDFs, README; no EDAS receipt or submission copy. | Unverified; revision 28 is only the best local candidate. |
 | CoIR versus local FAISS | Cached CoIR result, local run, installed CoIR package source. | Protocols differ; score gap is measured after encoding but its cause is unresolved. |
 | Executed notebook identity | Run hashes compared with repository/run notebook files. | Commit identity is known; byte-level executed notebook identity is unverified. |
+
+## Reviewer concern findings
+
+Scope: this issue audits R3's split/weight-selection and optimistic-bias concerns and R2's implementation-detail concern. These verdicts distinguish later local evidence from the conference upload, whose exact file remains unidentified.
+
+### R3 — split reuse, weight selection, and strength of evidence
+
+| Concern | Verdict | Evidence and interpretation |
+| --- | --- | --- |
+| The 500 tuning queries were reused as the 500 test queries. | Contradicted by the saved later artifact chain; unresolved for the conference upload. | The pinned CoIR-Retrieval/cosqa revision has 500 `valid` and 500 `test` queries. Their IDs, normalized texts, positive judgments, and relevant documents have zero overlap. The selection manifest uses `valid`; the saved final run uses `test`; the ranking and validation-summary hashes match. The revision-28 anonymous manuscript states this separation. The revision-00 PDF is explicitly an AZH-518 review input, not proof of the conference upload. |
+| Weights were selected using all 500 validation queries. | Confirmed. | The frozen manifest selects on all 500 `valid` queries, maximizing nDCG@10 over 21 RRF weights from 0.00 to 1.00 by 0.05, with k=60. Therefore validation scores are tuned selection results and must not be presented as held-out performance. This is distinct from reusing test queries. |
+| Test judgments influenced the saved weight selection. | Not supported by the saved later artifact chain; unresolved for the conference upload. | The manifest records `valid`, its input hashes match, and the final saved evaluation uses the disjoint `test` split with those frozen weights. No local artifact inspected shows test qrels entering selection. |
+| The gains are small and do not establish every component's benefit. | Partly confirmed, with a clearer split-specific result. | On the saved 500-query test run, nDCG@10 changes versus E5 are: HyDE +0.01416 (95% paired-bootstrap CI [0.00313, 0.02523]); reranking +0.00209 ([-0.00949, 0.01348]); combined +0.01945 ([0.00894, 0.03017]). The reranking-only interval includes zero. Combined versus HyDE is +0.00529 ([-0.00024, 0.01137]), also including zero, so the best combined point score does not show an incremental gain over HyDE. Intervals use 20,000 paired query bootstrap replicates, seed 518, and are unadjusted across comparisons. |
+
+The local evidence therefore supports positive nDCG@10 differences for HyDE and the combined system versus E5 on this saved test split, but not for reranking alone or for combined versus HyDE. The evidence remains one CosQA snapshot and one 500-query test sample; it does not establish broader code-search gains. It also cannot establish whether the conference submission used this exact data and selection chain.
+
+### R2 — implementation detail and presentation
+
+| Concern | Verdict | Evidence and interpretation |
+| --- | --- | --- |
+| Implementation description needs more detail. | Addressed in the later local manuscript; not verified for the conference upload. | The preserved Methods section specifies text-only CoIR CosQA inputs, E5 model/input settings and depth, the generation prompt and token limit, reranker and candidate pool, weighted-RRF equation, validation grid/metric/tie rule, deterministic expansion candidate union/truncation, and reranker candidate preservation. Revision 03's notes record the added validation-only selection and CoIR-path distinction; revision 28 retains this protocol. |
+| References should appear in sequence. | Sequential in the revision-28 local PDF. | Its bibliography contains entries [1]–[12] in order, consistent with first citation order in `main.tex`. This checks the preserved local revision only. |
+| Grammar needs checking. | Not conclusively adjudicated. | The reviewer supplied no specific sentence-level defects, and the preserved review notes do not record an independent full copyedit against that comment. |
+
+### Submission identity boundary
+
+`paper/README.md` identifies revision 28's anonymous PDF as the intended EDAS upload source, but the named `submission-anonymous.pdf` is absent. The root review PDF is byte-identical to revision 28's anonymous PDF; that proves the local copy relationship, not that EDAS received it. Revision 00 is labeled as material supplied to the AZH-518 review thread, not as a submission receipt. No EDAS receipt or exact uploaded file was found. Accordingly, R3's original-submission leakage allegation and R2's original-submission presentation assessment remain unverified even where later local revisions address them.
 
 ## Dataset and split audit
 
