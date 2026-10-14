@@ -1,6 +1,6 @@
 # Code Retrieval research specification
 
-> Active scope: a CosQA-only reproduction and ablation study. The versioned controls are in [study-protocol-2026-10-14.md](study-protocol-2026-10-14.md). Historical results remain preserved in [reproducibility.md](reproducibility.md) and the provenance audit.
+> Active scope: a CosQA-only reproduction and ablation study. The frozen controls are in [study-protocol.md](study-protocol.md). Historical results remain preserved in [reproducibility.md](reproducibility.md) and the provenance audit.
 
 ## Question
 

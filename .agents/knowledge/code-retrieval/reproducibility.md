@@ -4,7 +4,7 @@
 
 The active scope is one dataset: CoIR-Retrieval/cosqa. The current question, pinned
 models, ablations, CPU controls, and claim boundary are frozen in
-[`study-protocol-2026-10-14.md`](study-protocol-2026-10-14.md). Do not introduce
+[`study-protocol.md`](study-protocol.md). Do not introduce
 APPS, Qwen, a second dataset, or remote-GPU execution.
 
 This is a focused reproduction and ablation of the existing CosQA workflow. Its

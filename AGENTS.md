@@ -40,4 +40,4 @@ existing workflow, and document why it is needed.
 
 ## File naming
 
-Do not include Linear issue IDs or other tracker codes in filenames. Use a descriptive name based on the file's contents. Keep issue IDs in Linear or pull request metadata, or in the document text when traceability is useful.
+Do not include Linear issue IDs or other tracker codes in filenames. Use a descriptive name based on the file's contents. Keep issue IDs in Linear or pull request metadata, or in the document text when traceability is useful. For current guidance and project documents, prefer stable descriptive filenames and keep dates inside the file. Put a date in a filename only when it identifies an immutable run or dated audit artifact.

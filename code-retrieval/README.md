@@ -2,8 +2,8 @@
 
 > This project studies CoIR CosQA only. The active work is a reproduction and
 > ablation of the existing E5, Flan-T5-base HyDE, and general cross-encoder
-> workflow. The dated protocol is
-> [here](../.agents/knowledge/code-retrieval/study-protocol-2026-10-14.md).
+> workflow. The study protocol is
+> [here](../.agents/knowledge/code-retrieval/study-protocol.md).
 > APPS, Qwen, a second dataset, and remote-GPU execution are outside this scope.
 > CosQA test results have already been examined, so new test results are
 > retrospective and exploratory, not independent confirmation.
