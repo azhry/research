@@ -2,15 +2,15 @@
 
 > This project studies CoIR CosQA only. The active work is a reproduction and
 > ablation of the existing E5, Flan-T5-base HyDE, and general cross-encoder
-> workflow. The study protocol is
-> [here](../.agents/knowledge/code-retrieval/study-protocol.md).
+> workflow. The study specification is
+> [here](../.agents/knowledge/code-retrieval/research-spec.md).
 > APPS, Qwen, a second dataset, and remote-GPU execution are outside this scope.
 > CosQA test results have already been examined, so new test results are
 > retrospective and exploratory, not independent confirmation.
 
 ## Study scope
 
-The existing four-system notebook is the reproduction baseline. The protocol adds
+The existing four-system notebook is the reproduction baseline. The specification adds
 two focused representation checks—query plus generated text without fusion, and
 generated text alone—and one code-trained reranker comparison on the same E5
 candidate pool. The new code-trained model has not been run; it must pass a real

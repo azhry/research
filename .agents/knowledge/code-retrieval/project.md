@@ -24,7 +24,7 @@ The CosQA test results and validation choices have already been examined. New te
 | Evaluator | `coir-eval==0.7.0`, with the repository's saved-order tie policy |
 | Primary metric | `nDCG@10` |
 
-The complete experiment contract, model prompts, ablations, selection boundary, CPU preflight, and evidence limits are in [the CosQA protocol](study-protocol.md).
+The complete experiment contract, model prompts, ablations, selection boundary, CPU preflight, and evidence limits are in [the CosQA study specification](research-spec.md).
 
 ## Comparison scope
 
