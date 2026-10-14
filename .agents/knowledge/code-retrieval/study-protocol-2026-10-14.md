@@ -10,7 +10,7 @@ This is a single-dataset reproducibility and ablation study. It explains the exi
 
 CosQA test metrics and validation-selected weights have already been examined. New test-split results are retrospective and exploratory, not independent confirmatory evidence. The exact experiment used in the conference submission remains unresolved.
 
-**Reviewer boundary:** R1 explicitly allowed either another dataset or a narrowly scoped CosQA reproducibility/ablation study; the focused CosQA path is selected. R1's code-oriented model comparison is planned through a code-trained reranker. R3's requested representation ablations are included. R3's second-dataset request and concern about Flan-T5-base hypothesis quality remain unresolved and must be acknowledged as limitations. This study does not add a second dataset or benchmark a stronger generator.
+**Reviewer boundary:** R1 explicitly allowed either another dataset or a narrowly scoped CosQA reproducibility/ablation study; this protocol selects the CosQA-only path. R1's code-oriented model comparison is planned through a code-trained reranker. R3's requested representation ablations are included. R3 also requested a second dataset and raised a concern about Flan-T5-base hypothesis quality; both are outside the selected scope. The existing pinned Flan-T5-base is retained to reproduce the CosQA workflow, not to establish generator quality or cross-dataset generalization. Whether this narrowed scope satisfies the reviewers remains for them to decide.
 
 ## Dataset and evaluation boundary
 
