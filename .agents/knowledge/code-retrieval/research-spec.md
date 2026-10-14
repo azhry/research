@@ -1,6 +1,6 @@
 # Code Retrieval research specification
 
-> The active prospective study is frozen in [AZH-526 revised code retrieval protocol](protocol-azh-526-20261014.md). The CosQA protocol below records the earlier study and remains historical/retrospective; do not use it as the new confirmatory plan.
+> The active prospective study is frozen in [revised code retrieval protocol](study-protocol-2026-10-14.md). The CosQA protocol below records the earlier study and remains historical/retrospective; do not use it as the new confirmatory plan.
 
 ## Question
 

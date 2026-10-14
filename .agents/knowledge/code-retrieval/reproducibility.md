@@ -5,7 +5,7 @@
 The approved prospective APPS scope and its immutable dataset/model revisions,
 selection rule, generation prompt, complete system matrix, resource limits, and
 inferential policy are frozen in
-[`protocol-azh-526-20261014.md`](protocol-azh-526-20261014.md). Follow that
+[`study-protocol-2026-10-14.md`](study-protocol-2026-10-14.md). Follow that
 protocol for new APPS work. The CosQA records below describe historical runs;
 their test results are retrospective and must not tune the APPS protocol.
 

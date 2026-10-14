@@ -24,7 +24,7 @@ study remains retrospective descriptive evidence.
 
 The complete frozen scope, selection split, prompts, system matrix, evaluation
 boundary, multiplicity policy, resource cap, and data-handling constraints are in
-[`protocol-azh-526-20261014.md`](protocol-azh-526-20261014.md). This protocol is
+[`study-protocol-2026-10-14.md`](study-protocol-2026-10-14.md). This protocol is
 approved but not yet implemented or benchmarked.
 
 ## Required experiments
@@ -39,7 +39,7 @@ judgments, and evaluator. HyDE changes only the query representation; the
 cross-encoder only reorders the first-stage candidate pool.
 
 The APPS generator, prompt, pair-scoring reranker, and settings are fixed by the
-AZH-526 protocol. Do not change them based on test results.
+revised protocol. Do not change them based on test results.
 
 ## Deliverables
 

@@ -1,4 +1,4 @@
-# AZH-526 revised code retrieval protocol
+# Revised code retrieval protocol
 
 **Status:** Frozen on 2026-10-14 after the user selected the recommended defaults. This is a design record; no APPS inference or benchmark run has been performed under it.
 

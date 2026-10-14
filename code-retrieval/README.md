@@ -2,7 +2,7 @@
 
 > This README documents the existing CosQA workflow. The prospective APPS study
 > is approved but not implemented by these notebooks; follow
-> [the frozen AZH-526 protocol](../.agents/knowledge/code-retrieval/protocol-azh-526-20261014.md)
+> [the frozen revised protocol](../.agents/knowledge/code-retrieval/study-protocol-2026-10-14.md)
 > and do not treat CosQA outputs as APPS evidence.
 
 `notebooks/e5_baseline_experiment.ipynb` is the smoke-friendly entry point for
