@@ -103,7 +103,9 @@ evaluator for every row. `nDCG@10` remains primary; the run also reports
 and keeps the original programming question alongside its hypothesis. The
 cross-encoder ranking is fused with E5 rather than replacing it. Fusion weights
 are selected on the complete `valid` qrels split, recorded with the run, and
-applied once to held-out `test`. Raw component scores remain diagnostics. The
+applied once to `test`. Since test results have already been examined, this is a
+retrospective/exploratory comparison, not independent confirmation. Raw component
+scores remain diagnostics. The
 combined row fuses the selected E5+HyDE and E5+reranker rankings. Resolved model
 revisions, fusion controls, component rankings, aggregate metrics, and a
 per-query metric export are saved with each run. The notebook adds paired
@@ -184,7 +186,8 @@ notebooks, caches, results, and metadata are ignored by Git; use a unique
 
 Fusion weights were selected using the complete `valid` split and are stored in
 `artifacts/e5_hyde_rerank/validation/weight_selection.json`. The four-system
-notebook reads those fixed weights and applies them once to held-out `test`.
+notebook reads those fixed weights and applies them to `test`. These results are
+retrospective/exploratory, as noted above.
 Keep that validation artifact with the ignored local artifacts when rerunning
 the notebook. Never select weights from test results. The removed standalone
 selection, ranking-verification, and result-assembly scripts are not part of

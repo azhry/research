@@ -169,8 +169,10 @@ validation-selected 0.65/0.35 E5/HyDE RRF. The raw CrossEncoder order scores
 0.75/0.25 component fusion scores 0.45932. The weight sweep covers all 21 E5
 weights from 0.00 to 1.00 in 0.05 increments over all 500 valid queries.
 
-The complete held-out test comparison, using those fixed validation-selected
-weights once, scores 0.45876 for E5, 0.47292 for E5+HyDE, 0.46085 for E5 plus
+The historical test comparison applied the validation-selected weights once.
+The test metrics have since been examined, so these results are
+retrospective/exploratory, not independent confirmation. The comparison scores
+0.45876 for E5, 0.47292 for E5+HyDE, 0.46085 for E5 plus
 re-ranking, and 0.47821 for the combined system. Their absolute deltas versus
 E5 are +0.01416, +0.00209, and +0.01945. Raw query-plus-hypothesis and raw
 CrossEncoder diagnostics score 0.41394 and 0.28619. The saved historical
