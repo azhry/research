@@ -1,54 +1,67 @@
 # Code Retrieval research specification
 
-> The active prospective study is frozen in [revised code retrieval protocol](study-protocol-2026-10-14.md). The CosQA protocol below records the earlier study and remains historical/retrospective; do not use it as the new confirmatory plan.
+> Active scope: a CosQA-only reproduction and ablation study. The versioned controls are in [study-protocol-2026-10-14.md](study-protocol-2026-10-14.md). Historical results remain preserved in [reproducibility.md](reproducibility.md) and the provenance audit.
 
 ## Question
 
-On CosQA, how much do HyDE and a cross-encoder re-ranker improve E5 code retrieval,
-individually and together, according to `nDCG@10`?
+On the fixed CoIR CosQA snapshot, how do the existing E5, HyDE, rank-fusion, and reranking conditions affect `nDCG@10`, and can the saved comparison be reproduced under its recorded controls?
 
-## System matrix
+## Scope and claims
 
-| ID | First stage | TQE | Re-ranker |
-| --- | --- | --- | --- |
-| `e5` | `intfloat/e5-base-v2` | None | None |
-| `e5_hyde` | `intfloat/e5-base-v2` | HyDE | None |
-| `e5_rerank` | `intfloat/e5-base-v2` | None | `cross-encoder/ms-marco-MiniLM-L6-v2` |
-| `e5_hyde_rerank` | `intfloat/e5-base-v2` | HyDE | `cross-encoder/ms-marco-MiniLM-L6-v2` |
+Use one dataset: CoIR-Retrieval/cosqa. This study explains the existing CosQA results and isolates the contribution of the two HyDE representations, fusion, and reranker choice.
 
-The re-ranker receives only the shared first-stage candidate pool and may reorder it;
-it must not introduce new documents.
+The validation and test metrics have already been examined. New results on the test split are retrospective and exploratory, not independent confirmatory evidence. This protocol does not support cross-dataset generalization, broad code-search claims, novelty, or state-of-the-art claims.
+
+R1 explicitly offered a focused CosQA study as an alternative to a second dataset; that is the selected path. R1's code-oriented model comparison is planned through a code-trained reranker. R3's second-dataset request and concern about Flan-T5-base hypothesis quality remain unresolved and must be reported as limitations; this protocol does not add a second dataset or benchmark a stronger generator.
 
 ## Dataset and evaluator
 
-- Dataset: `CoIR-Retrieval/cosqa`.
-- Benchmark: COIR repository.
-- Record exact dataset split, revision, loaded field names, benchmark commit/package
-  version, and relevance-judgment convention.
-- Inspect the real schema before writing adapters; do not rely on legacy local notes.
+- Dataset: `CoIR-Retrieval/cosqa`, immutable revision `0846fa3b963a21bead36e9fab61451fc83b777a6`.
+- Use the `queries/queries` and `corpus/corpus` populations with the `default` qrels configuration. Use the complete `valid` and `test` qrels splits: 500 queries each and the complete 20,604-document corpus.
+- Preserve source IDs. Use text-only query and corpus inputs; exclude titles and other metadata.
+- Use the existing E5 setup: `intfloat/e5-base-v2` at revision `f52bf8ec8c7124536f0efb74aca902b2995e5bcd`, query/passage prefixes, normalized embeddings, 512-token limit, exact inner-product retrieval, candidate depth 1,000, seed 42, batch size 128, and 8 CPU threads.
+- Evaluate with `coir-eval==0.7.0` and the existing saved-order tie policy. Record that the local policy differs from an unqualified stock CoIR leaderboard result.
 
-## HyDE controls
+## Comparison matrix
 
-Expose and record the generator model/revision, prompt, number of hypotheses,
-temperature, maximum tokens, stopping behavior, combination strategy, and cache key.
-The original query remains the evaluation query. HyDE must not access labels,
-answers, or target documents.
+Keep the original four rows as the reproduction baseline. All rows use the same data population, evaluator, candidate depth, and E5 first stage unless the representation is the variable under study.
 
-## Primary result
+| Condition | Query representation or reranker | Purpose |
+| --- | --- | --- |
+| `e5` | Original query | Baseline |
+| `e5_hyde` | Original query plus generated hypothesis; weighted RRF with the original E5 ranking | Existing fused HyDE condition |
+| `e5_rerank` | Existing general-purpose cross-encoder on the E5 top-1,000; weighted RRF with the E5 order | Existing reranker condition |
+| `e5_hyde_rerank` | Weighted RRF of the selected HyDE and generic-reranker rankings | Existing combined condition |
+| `e5_hyde_raw` | Original query plus generated hypothesis, with no rank fusion | Representation/fusion ablation; reuse the existing raw ranking if its provenance matches |
+| `e5_hypothesis_only` | Generated hypothesis alone (canonical HyDE), with no rank fusion | Representation ablation using the same saved hypotheses |
+| `e5_code_rerank` | Code-trained pair scorer on the same E5 top-1,000, with a validation-selected E5 fusion | Code-oriented reranker comparison |
 
-Report aggregated `nDCG@10` for all four systems as the primary metric. Also
-report `MAP@10`, `Recall@10`, and `Recall@1000` from the same ordered rankings
-and qrels. The held-out CosQA qrels contain one positive judgment per query, so
-`MAP@10` equals `MRR@10`, `Recall@10` is the top-10 hit rate, and
-`Recall@1000` measures candidate coverage. Do not emphasize `Precision@10`,
-which is `Recall@10 / 10` under this qrels structure.
+Report each reranker's raw pair-score order as a diagnostic. Preserve candidate IDs and E5 order for score ties; rerankers must not add documents. Do not expand this into a full generator-by-reranker factorial.
 
-Include paired query-bootstrap intervals for metric differences versus E5,
-with the replicate count, seed, and multiple-comparison caveat. Report absolute
-scores and deltas, query count/exclusions, candidate and re-ranking depth, and
-whether the official COIR evaluator completed successfully. Latency and memory
-are secondary observations.
+## Generation and fusion controls
 
-Keep split, corpus snapshot, preprocessing, model revisions, prefixes, truncation,
-candidate depth, evaluator, and seed fixed unless an exploratory run explicitly
-documents a deviation.
+Use the existing `google/flan-t5-base` generator at revision `7bcac572ce56db69c1ea7c8af255c5d7c9672fc2`. Generate one hypothesis from query text only, using the current prompt and fallback sequence in `code-retrieval/src/e5_hyde_rerank.py`, greedy decoding (`do_sample=false`), EOS stopping, and a 64-token limit. Preserve the exact generated text, fallback use, and cache identity. Empty output is a failed condition, not grounds for a silent substitute.
+
+For query-plus-hypothesis input, preserve the original implementation's trimmed query, two LF characters, and trimmed hypothesis. For the canonical HyDE ablation, use only that same trimmed hypothesis. Do not regenerate hypotheses between these representation conditions.
+
+Use the existing validation-only weighted-RRF selection: all 500 `valid` queries, `rrf_k=60`, and weights from 0.00 through 1.00 in 0.05 steps. On a tie, prefer the larger weight on the first input. Record every tested weight and the selected setting. Do not use test results to pick prompts, weights, models, or conditions.
+
+## Code-trained reranker and compute
+
+Compare `NamanAgnih0tri/code-reranker-miniLM-staqc` at pinned revision `9bcf5f1cceef4914e2fc564b2e4ee78410626702`. Its model card reports code-pair training; treat that statement as publisher-reported, not independently audited. Before a complete comparison, load the real weights on CPU and verify one finite score per query/code pair. If loading or scoring fails, or available local resources are insufficient, stop and document the limitation. Do not switch to a remote GPU, quantize, sample the benchmark, or silently substitute a different checkpoint.
+
+All inference in this study is local CPU inference. Record the CPU, RAM, package versions, batch/thread settings, per-stage runtime, and peak host memory. GPU memory is not applicable. A smoke or preflight run is not benchmark evidence.
+
+## Outcomes and interpretation
+
+- Primary metric: mean per-query `nDCG@10`, with absolute scores and paired deltas against E5.
+- Secondary metrics: `MAP@10`, `Recall@10`, and `Recall@1000`, using the existing metric implementation.
+- Report the existing paired query-bootstrap summaries using 20,000 resamples, seed 518, and unadjusted 95% percentile intervals. Treat them as descriptive, not confirmatory or multiplicity-adjusted inference.
+- Preserve per-query rows, complete ordered rankings, generation records, and provenance for every condition.
+- Negative, null, and failed outcomes are valid. Do not infer expansion effectiveness from a fused score alone; report raw and fused conditions separately.
+
+## Historical evidence and stopping rules
+
+The saved CosQA test metrics and validation choices have been reviewed. Keep them labeled as historical. New runs use unique output identities and may not overwrite prior artifacts. The exact conference-submission experiment provenance is still unresolved.
+
+No second dataset is part of this study. The request for one remains an acknowledged reviewer limitation; do not imply that the CosQA-only study satisfies it. Do not use APPS, Qwen, remote-GPU resources, or new human labels in this protocol.

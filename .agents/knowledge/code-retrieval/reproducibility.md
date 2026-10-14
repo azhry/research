@@ -1,13 +1,20 @@
 # Code Retrieval reproducibility rules
 
-## Active revised study
+## Active CosQA study
 
-The approved prospective APPS scope and its immutable dataset/model revisions,
-selection rule, generation prompt, complete system matrix, resource limits, and
-inferential policy are frozen in
-[`study-protocol-2026-10-14.md`](study-protocol-2026-10-14.md). Follow that
-protocol for new APPS work. The CosQA records below describe historical runs;
-their test results are retrospective and must not tune the APPS protocol.
+The active scope is one dataset: CoIR-Retrieval/cosqa. The current question, pinned
+models, ablations, CPU controls, and claim boundary are frozen in
+[`study-protocol-2026-10-14.md`](study-protocol-2026-10-14.md). Do not introduce
+APPS, Qwen, a second dataset, or remote-GPU execution.
+
+This is a focused reproduction and ablation of the existing CosQA workflow. Its
+test metrics and validation choices have already been examined; new test results
+are retrospective and exploratory, not independent confirmation. The conference
+submission's exact run provenance remains unresolved. The existing E5, Flan-T5-base,
+and general cross-encoder pipeline stays the baseline. The requested code-trained
+reranker is an additional planned comparison, gated on a real-weight CPU preflight.
+The second-dataset request and Flan-T5-base quality concern remain unresolved; this
+scope does not add a second dataset or benchmark a stronger generator.
 
 ## Objective comparison contract
 
@@ -110,13 +117,18 @@ be labeled with their tie policy before comparing them to current results.
 
 ## Historical CosQA validation and method selection
 
-Use the CosQA `valid` qrels split to choose query-combination and fusion settings.
-Keep the `test` qrels split held out until those settings are fixed. Record the
-validation split, complete query count, candidate depth, evaluator version, every
-tested setting, and the selected setting in the run artifacts. A test result may
-confirm the selected method once; do not search test results for a better weight.
-For weighted RRF, sweep the E5 weight from 0.00 through 1.00 in 0.05 steps with
-`rrf_k=60`; when validation scores tie, select the higher E5 weight.
+Use the complete CosQA `valid` qrels split to select query-combination and fusion
+settings. The existing study used the `test` split for its final metrics, and those
+metrics have since been examined. For new conditions, freeze settings using
+`valid` before producing full `test` rankings. Never search test outcomes for a
+better weight or method. Because the test results are already known, new test
+comparisons are retrospective/exploratory, not independent confirmation.
+
+Record the validation split, all 500 query IDs, candidate depth, evaluator version,
+every tested setting, and the selected setting. For weighted RRF, use
+`rrf_k=60` and sweep the first-input weight from 0.00 through 1.00 in 0.05 steps.
+When validation scores tie, choose the higher first-input weight; for the E5
+comparisons this means the higher E5 weight.
 
 The current HyDE representation retains the original programming question and
 appends its generated hypothesis. The experiment reports both the raw transformed
@@ -176,15 +188,17 @@ history, but use the current policy for every new system comparison.
 
 ## Existing CosQA notebook order
 
-1. Check Python, GPU, and dependencies; execute through the pinned-kernel
-   runner for benchmark evidence.
-2. Capture versions, model revisions, dataset revision, and seed.
+1. Check Python, CPU memory, and dependencies; use the pinned-kernel
+   runner for the declared complete run. Do not configure a GPU.
+2. Capture versions, model revisions, dataset revision, device, and seed.
 3. Load data and inspect the actual schema.
 4. Encode/cache the corpus.
 5. Run and evaluate E5.
-6. Generate/cache HyDE text and evaluate E5 + HyDE.
-7. Re-rank the shared candidate pools for the two re-ranked systems.
-8. Produce the comparison table, artifacts, and limitations.
+6. Generate/cache one hypothesis per query.
+7. Evaluate query-plus-hypothesis retrieval without fusion and hypothesis-only retrieval from the same saved hypotheses.
+8. Re-rank the shared candidate pools with the existing general cross-encoder.
+9. Run the code-trained pair scorer only after its real-weight CPU preflight passes.
+10. Produce the comparison table, per-query artifacts, costs, and limitations.
 
 Keep reusable logic in modules once it exceeds a few lines; keep the notebook as the
 ordered experiment entry point. Avoid hidden state or manually edited result cells.

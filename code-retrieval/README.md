@@ -1,9 +1,25 @@
-# E5 baseline
+# CosQA code retrieval experiments
 
-> This README documents the existing CosQA workflow. The prospective APPS study
-> is approved but not implemented by these notebooks; follow
-> [the frozen revised protocol](../.agents/knowledge/code-retrieval/study-protocol-2026-10-14.md)
-> and do not treat CosQA outputs as APPS evidence.
+> This project studies CoIR CosQA only. The active work is a reproduction and
+> ablation of the existing E5, Flan-T5-base HyDE, and general cross-encoder
+> workflow. The dated protocol is
+> [here](../.agents/knowledge/code-retrieval/study-protocol-2026-10-14.md).
+> APPS, Qwen, a second dataset, and remote-GPU execution are outside this scope.
+> CosQA test results have already been examined, so new test results are
+> retrospective and exploratory, not independent confirmation.
+
+## Study scope
+
+The existing four-system notebook is the reproduction baseline. The protocol adds
+two focused representation checks—query plus generated text without fusion, and
+generated text alone—and one code-trained reranker comparison on the same E5
+candidate pool. The new code-trained model has not been run; it must pass a real
+weight-loading and finite-score preflight on CPU before a complete comparison.
+
+The R1 CosQA-only alternative is selected. R3's second-dataset request and
+Flan-T5-base quality concern remain unresolved and must be stated as limitations.
+The study makes no cross-dataset generalization claim and does not benchmark a
+stronger generator.
 
 `notebooks/e5_baseline_experiment.ipynb` is the smoke-friendly entry point for
 the CosQA E5-base-v2 baseline. The full-dataset entry point is
