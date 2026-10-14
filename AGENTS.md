@@ -37,3 +37,7 @@ existing workflow, and document why it is needed.
 - Never use fake model responses or synthetic scores as evidence for model
   quality.
 - Separate measured findings from hypotheses and state material limitations.
+
+## File naming
+
+Do not include Linear issue IDs or other tracker codes in filenames. Use a descriptive name based on the file's contents. Keep issue IDs in Linear or pull request metadata, or in the document text when traceability is useful.
