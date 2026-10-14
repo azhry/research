@@ -1,5 +1,14 @@
 # Code Retrieval reproducibility rules
 
+## Active revised study
+
+The approved prospective APPS scope and its immutable dataset/model revisions,
+selection rule, generation prompt, complete system matrix, resource limits, and
+inferential policy are frozen in
+[`protocol-azh-526-20261014.md`](protocol-azh-526-20261014.md). Follow that
+protocol for new APPS work. The CosQA records below describe historical runs;
+their test results are retrospective and must not tune the APPS protocol.
+
 ## Objective comparison contract
 
 Treat two benchmark runs as directly comparable only when every control below is
@@ -99,7 +108,7 @@ the hit rate, and `Recall@1000` is candidate coverage. `Precision@10` is
 redundant with `Recall@10` and is not emphasized. Older raw-score metrics must
 be labeled with their tie policy before comparing them to current results.
 
-## Validation and method selection
+## Historical CosQA validation and method selection
 
 Use the CosQA `valid` qrels split to choose query-combination and fusion settings.
 Keep the `test` qrels split held out until those settings are fixed. Record the
@@ -165,7 +174,7 @@ similarity ties are treated as the stored Faiss order. The older raw-component
 scores likewise use the previous tie policy. Keep those values in the artifact
 history, but use the current policy for every new system comparison.
 
-## Notebook order
+## Existing CosQA notebook order
 
 1. Check Python, GPU, and dependencies; execute through the pinned-kernel
    runner for benchmark evidence.

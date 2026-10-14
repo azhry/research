@@ -1,5 +1,10 @@
 # E5 baseline
 
+> This README documents the existing CosQA workflow. The prospective APPS study
+> is approved but not implemented by these notebooks; follow
+> [the frozen AZH-526 protocol](../.agents/knowledge/code-retrieval/protocol-azh-526-20261014.md)
+> and do not treat CosQA outputs as APPS evidence.
+
 `notebooks/e5_baseline_experiment.ipynb` is the smoke-friendly entry point for
 the CosQA E5-base-v2 baseline. The full-dataset entry point is
 `notebooks/e5_baseline_full_experiment.ipynb`, which hard-codes benchmark mode

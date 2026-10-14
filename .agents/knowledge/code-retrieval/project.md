@@ -2,8 +2,9 @@
 
 ## Objective
 
-Evaluate how HyDE query expansion and cross-encoder re-ranking affect code retrieval
-when `intfloat/e5-base-v2` is the first-stage retriever.
+Evaluate how code-oriented HyDE query expansion and pairwise code reranking affect
+`intfloat/e5-base-v2` on APPS text-to-code contest retrieval. The completed CosQA
+study remains retrospective descriptive evidence.
 
 ## Study contract
 
@@ -13,12 +14,18 @@ when `intfloat/e5-base-v2` is the first-stage retriever.
 | Directory | `code-retrieval` |
 | Language/runtime | Python; Google Colab / Jupyter Notebook |
 | Benchmark | `https://github.com/coir-team/coir` |
-| Dataset | `CoIR-Retrieval/cosqa` |
+| Prospective dataset | `CoIR-Retrieval/apps` at `ad8755dfa53f1de865e165d507fa0523502b5682` |
+| Historical dataset | `CoIR-Retrieval/cosqa` at `0846fa3b963a21bead36e9fab61451fc83b777a6` |
 | Retriever | `intfloat/e5-base-v2` |
-| TQE | HyDE |
-| Re-ranker | `cross-encoder/ms-marco-MiniLM-L6-v2` |
+| HyDE generator | `Qwen/Qwen2.5-Coder-7B-Instruct` at `c03e6d358207e414f1eca0bb1891e29f1db0e242` |
+| Pairwise reranker | `NamanAgnih0tri/code-reranker-miniLM-staqc` at `9bcf5f1cceef4914e2fc564b2e4ee78410626702` |
 | Primary metric | `nDCG@10` |
 | Linear project | `Code Retrieval` |
+
+The complete frozen scope, selection split, prompts, system matrix, evaluation
+boundary, multiplicity policy, resource cap, and data-handling constraints are in
+[`protocol-azh-526-20261014.md`](protocol-azh-526-20261014.md). This protocol is
+approved but not yet implemented or benchmarked.
 
 ## Required experiments
 
@@ -31,9 +38,8 @@ All systems use the same corpus, split, preprocessing, candidate depth, relevanc
 judgments, and evaluator. HyDE changes only the query representation; the
 cross-encoder only reorders the first-stage candidate pool.
 
-The HyDE generator model and prompt are not fixed by the brief. Choose them
-explicitly before the primary run and record the model revision, prompt, generation
-settings, and cache identity.
+The APPS generator, prompt, pair-scoring reranker, and settings are fixed by the
+AZH-526 protocol. Do not change them based on test results.
 
 ## Deliverables
 
