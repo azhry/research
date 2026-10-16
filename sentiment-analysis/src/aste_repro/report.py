@@ -223,6 +223,8 @@ def build_report(
         rows.append((*key, stats, None))
 
     target_rows = [row for row in rows if row[5] is not None]
+    protocol_complete_count = sum(row[4]["n"] for row in target_rows)
+    protocol_expected_count = sum(row[4]["expected"] for row in target_rows)
     target_cells_complete = all(row[4]["status"] == "complete" for row in target_rows)
     target_met_count = sum(
         row[4]["status"] == "complete"
@@ -289,7 +291,8 @@ def build_report(
         "",
         "## Completed historical optimizer schedules",
         "",
-        "The native-rate history contains 20 complete measured runs (five per encoder) but predates explicit protocol IDs; its manifests record the expected group rates and all runs remain under their original identities. Those full-gold means are below all four Chapter 5 references. The second schedule is the completed uniform-rate protocol, now superseded because its adapter overrode PyABSA's graph/classifier rates. Neither historical schedule is relabeled as an active-protocol run. No duplicate 20-run queue was started during this correction; the active v3 rows remain `not run` until runs with that protocol ID are deliberately collected.",
+        "The native-rate history contains 20 complete measured runs (five per encoder) but predates explicit protocol IDs; its manifests record the expected group rates and all runs remain under their original identities. Those full-gold means are below all four Chapter 5 references. The second schedule is the completed uniform-rate protocol, now superseded because its adapter overrode PyABSA's graph/classifier rates. Neither historical schedule is relabeled as an active-protocol run. "
+        f"The active v3 protocol has {protocol_complete_count}/{protocol_expected_count} complete HoASA EMCGCN seed runs; those measurements are reported separately below and are not pooled with historical schedules.",
         "",
         "The explicit-only scores below use the same predictions and exclude implicit-aspect triplets from the gold denominator. Chapter 5 does not document its implicit-label policy, and it selects the best test-set epoch while this replication selects on validation. These figures are sensitivity diagnostics, not evidence that a target has been reproduced.",
         "",
@@ -376,7 +379,7 @@ def build_report(
             "",
             "## Chapter 5 reference diagnostics",
             "",
-            "These rows refer only to the active native-group protocol. It has no complete runs yet; completed measurements under the historical schedules are shown above. The primary full-gold metric retains implicit-aspect triplets; explicit-only diagnostics do not establish that a Chapter 5 target was reproduced.",
+            "These rows summarize the active native-group protocol. The primary full-gold metric retains implicit-aspect triplets; explicit-only diagnostics do not establish a Chapter 5 match because its implicit-label policy is undocumented.",
             "",
             "| Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ | F1 change when implicit gold is excluded |",
             "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
