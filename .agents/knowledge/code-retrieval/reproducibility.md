@@ -1,5 +1,21 @@
 # Code Retrieval reproducibility rules
 
+## Active CosQA study
+
+The active scope is one dataset: CoIR-Retrieval/cosqa. The current question, pinned
+models, ablations, CPU controls, and claim boundary are frozen in
+[`research-spec.md`](research-spec.md). Do not introduce
+APPS, Qwen, a second dataset, or remote-GPU execution.
+
+This is a focused reproduction and ablation of the existing CosQA workflow. Its
+test metrics and validation choices have already been examined; new test results
+are retrospective and exploratory, not independent confirmation. The conference
+submission's exact run provenance remains unresolved. The existing E5, Flan-T5-base,
+and general cross-encoder pipeline stays the baseline. The requested code-trained
+reranker is an additional planned comparison, gated on a real-weight CPU preflight.
+The second-dataset request and Flan-T5-base quality concern remain unresolved; this
+scope does not add a second dataset or benchmark a stronger generator.
+
 ## Objective comparison contract
 
 Treat two benchmark runs as directly comparable only when every control below is
@@ -99,15 +115,20 @@ the hit rate, and `Recall@1000` is candidate coverage. `Precision@10` is
 redundant with `Recall@10` and is not emphasized. Older raw-score metrics must
 be labeled with their tie policy before comparing them to current results.
 
-## Validation and method selection
+## Historical CosQA validation and method selection
 
-Use the CosQA `valid` qrels split to choose query-combination and fusion settings.
-Keep the `test` qrels split held out until those settings are fixed. Record the
-validation split, complete query count, candidate depth, evaluator version, every
-tested setting, and the selected setting in the run artifacts. A test result may
-confirm the selected method once; do not search test results for a better weight.
-For weighted RRF, sweep the E5 weight from 0.00 through 1.00 in 0.05 steps with
-`rrf_k=60`; when validation scores tie, select the higher E5 weight.
+Use the complete CosQA `valid` qrels split to select query-combination and fusion
+settings. The existing study used the `test` split for its final metrics, and those
+metrics have since been examined. For new conditions, freeze settings using
+`valid` before producing full `test` rankings. Never search test outcomes for a
+better weight or method. Because the test results are already known, new test
+comparisons are retrospective/exploratory, not independent confirmation.
+
+Record the validation split, all 500 query IDs, candidate depth, evaluator version,
+every tested setting, and the selected setting. For weighted RRF, use
+`rrf_k=60` and sweep the first-input weight from 0.00 through 1.00 in 0.05 steps.
+When validation scores tie, choose the higher first-input weight; for the E5
+comparisons this means the higher E5 weight.
 
 The current HyDE representation retains the original programming question and
 appends its generated hypothesis. The experiment reports both the raw transformed
@@ -148,8 +169,10 @@ validation-selected 0.65/0.35 E5/HyDE RRF. The raw CrossEncoder order scores
 0.75/0.25 component fusion scores 0.45932. The weight sweep covers all 21 E5
 weights from 0.00 to 1.00 in 0.05 increments over all 500 valid queries.
 
-The complete held-out test comparison, using those fixed validation-selected
-weights once, scores 0.45876 for E5, 0.47292 for E5+HyDE, 0.46085 for E5 plus
+The historical test comparison applied the validation-selected weights once.
+The test metrics have since been examined, so these results are
+retrospective/exploratory, not independent confirmation. The comparison scores
+0.45876 for E5, 0.47292 for E5+HyDE, 0.46085 for E5 plus
 re-ranking, and 0.47821 for the combined system. Their absolute deltas versus
 E5 are +0.01416, +0.00209, and +0.01945. Raw query-plus-hypothesis and raw
 CrossEncoder diagnostics score 0.41394 and 0.28619. The saved historical
@@ -165,17 +188,19 @@ similarity ties are treated as the stored Faiss order. The older raw-component
 scores likewise use the previous tie policy. Keep those values in the artifact
 history, but use the current policy for every new system comparison.
 
-## Notebook order
+## Existing CosQA notebook order
 
-1. Check Python, GPU, and dependencies; execute through the pinned-kernel
-   runner for benchmark evidence.
-2. Capture versions, model revisions, dataset revision, and seed.
+1. Check Python, CPU memory, and dependencies; use the pinned-kernel
+   runner for the declared complete run. Do not configure a GPU.
+2. Capture versions, model revisions, dataset revision, device, and seed.
 3. Load data and inspect the actual schema.
 4. Encode/cache the corpus.
 5. Run and evaluate E5.
-6. Generate/cache HyDE text and evaluate E5 + HyDE.
-7. Re-rank the shared candidate pools for the two re-ranked systems.
-8. Produce the comparison table, artifacts, and limitations.
+6. Generate/cache one hypothesis per query.
+7. Evaluate query-plus-hypothesis retrieval without fusion and hypothesis-only retrieval from the same saved hypotheses.
+8. Re-rank the shared candidate pools with the existing general cross-encoder.
+9. Run the code-trained pair scorer only after its real-weight CPU preflight passes.
+10. Produce the comparison table, per-query artifacts, costs, and limitations.
 
 Keep reusable logic in modules once it exceeds a few lines; keep the notebook as the
 ordered experiment entry point. Avoid hidden state or manually edited result cells.
