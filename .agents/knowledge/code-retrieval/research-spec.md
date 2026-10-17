@@ -70,7 +70,7 @@ Use weighted reciprocal-rank fusion with `rrf_k=60`. For each fusion setting, sw
 - Secondary outcomes: `MAP@10`, `Recall@10`, and `Recall@1000`, from the same ordered rankings and qrels.
 - Use the existing paired query-bootstrap summary: 20,000 resamples, seed 518, 95% percentile intervals. These intervals are descriptive and unadjusted; do not present them as confirmatory or simultaneous bounds.
 - Preserve complete per-query metric rows, ranking order, candidate IDs, exclusions, generation records, selection outputs, and run metadata. Report runtime and peak host memory for the CPU stages; record unavailable measurements rather than inventing them.
-Do not infer that query expansion helped from a fused score alone; report raw and fused HyDE conditions separately.
+- Do not infer that query expansion helped from a fused score alone; report raw and fused HyDE conditions separately.
 
 - Negative, null, failed, and partial results are valid outcomes. Smoke and preflight runs are not benchmark evidence.
 
@@ -89,4 +89,4 @@ Preserve earlier CosQA results, code revisions, selection artifacts, caches, and
 - CosQA dataset at the pinned revision: https://huggingface.co/datasets/CoIR-Retrieval/cosqa/tree/0846fa3b963a21bead36e9fab61451fc83b777a6
 - Existing experiment entry point: `code-retrieval/notebooks/e5_hyde_rerank_experiment.ipynb`
 - Existing generation and fusion implementation: `code-retrieval/src/e5_hyde_rerank.py`
-- Existing CosQA provenance report: `experiment-provenance-audit.md`
+- Existing CosQA provenance report: `.agents/knowledge/code-retrieval/experiment-provenance-audit.md`
