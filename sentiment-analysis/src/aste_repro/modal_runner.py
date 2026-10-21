@@ -262,7 +262,7 @@ def _download_run(run_id: str, *, summary_only: bool = False) -> Path:
     gpu="T4",
     cpu=4,
     memory=16_384,
-    timeout=60 * 60,
+    timeout=4 * 60 * 60,
     volumes={str(REMOTE_RUNS_ROOT): RUNS_VOLUME},
 )
 def run_remote(
@@ -289,6 +289,7 @@ def run_remote(
         "torch_cuda_build": "2.5.1+cu121",
         "cpu_request": 4,
         "memory_mib_request": 16_384,
+        "function_timeout_seconds": 4 * 60 * 60,
     }
     try:
         result = run_experiment(
