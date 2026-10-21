@@ -97,6 +97,11 @@ to smoke to avoid starting a full benchmark accidentally. Set
 The command prints the unique run ID, smoke/benchmark status, and local
 artifact path. Modal Volumes keep remote artifacts durable; the local copy
 uses the standard manifest, metrics, predictions, logs, and checkpoint layout.
+For large GPU matrices, add `--artifact-mode summary` to keep manifests,
+metrics, predictions, and logs locally while retaining checkpoints on the
+`aste-research-runs` Volume. The generated `modal-storage.json` records the
+remote run prefix and checkpoint hashes. The default `full` mode still copies
+the complete artifact directory locally.
 See [Modal Images](https://modal.com/docs/guide/images) and
 [Modal Volumes](https://modal.com/docs/guide/volumes) for the provider behavior.
 

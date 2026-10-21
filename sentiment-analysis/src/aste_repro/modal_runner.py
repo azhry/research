@@ -178,13 +178,14 @@ def _validate_local_inputs(download_parser: bool) -> None:
         )
 
 
-def _download_run(run_id: str) -> Path:
+def _download_run(run_id: str, *, summary_only: bool = False) -> Path:
     destination = RUNS_ROOT / run_id
     if destination.exists():
         raise FileExistsError(f"refusing to overwrite existing run artifacts: {destination}")
 
     RUNS_ROOT.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{run_id}-download-", dir=RUNS_ROOT))
+    remote_only_files: list[str] = []
     try:
         entries = list(RUNS_VOLUME.iterdir(run_id, recursive=True))
         if not entries:
@@ -214,6 +215,10 @@ def _download_run(run_id: str) -> Path:
             if entry_type != "FILE":
                 raise ValueError(f"unsupported Modal Volume artifact type: {entry_type}")
 
+            if summary_only and relative.parts[0] == "checkpoints":
+                remote_only_files.append(relative.as_posix())
+                continue
+
             local_path.parent.mkdir(parents=True, exist_ok=True)
             with local_path.open("wb") as stream:
                 for chunk in RUNS_VOLUME.read_file(str(entry.path)):
@@ -225,6 +230,24 @@ def _download_run(run_id: str) -> Path:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         if manifest.get("run_id") != run_id:
             raise ValueError(f"Modal manifest run_id does not match requested run {run_id}")
+        if summary_only:
+            storage_record = {
+                "run_id": run_id,
+                "local_artifacts_complete": False,
+                "local_artifacts": sorted(
+                    path.relative_to(staging).as_posix()
+                    for path in staging.rglob("*")
+                    if path.is_file()
+                ),
+                "remote_volume": RUNS_VOLUME_NAME,
+                "remote_run_prefix": run_id,
+                "remote_only_artifacts": sorted(remote_only_files),
+                "remote_artifact_sha256": manifest.get("artifact_sha256", {}),
+            }
+            (staging / "modal-storage.json").write_text(
+                json.dumps(storage_record, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
         if destination.exists():
             raise FileExistsError(f"refusing to overwrite existing run artifacts: {destination}")
         staging.replace(destination)
@@ -296,9 +319,12 @@ def main(
     purpose: str = "smoke",
     smoke_examples: int = 24,
     download_parser: bool = False,
+    artifact_mode: str = "full",
 ) -> None:
     if purpose not in {"smoke", "benchmark"}:
         raise ValueError("purpose must be 'smoke' or 'benchmark'")
+    if artifact_mode not in {"full", "summary"}:
+        raise ValueError("artifact_mode must be 'full' or 'summary'")
     _validate_local_inputs(download_parser)
 
     from aste_repro.training import create_run_id
@@ -325,7 +351,7 @@ def main(
         )
     except Exception:
         try:
-            artifact_path = _download_run(run_id)
+            artifact_path = _download_run(run_id, summary_only=artifact_mode == "summary")
         except Exception:
             pass
         else:
@@ -335,14 +361,18 @@ def main(
             )
         raise
 
-    artifact_path = _download_run(result["run_id"])
+    artifact_path = _download_run(
+        result["run_id"], summary_only=artifact_mode == "summary"
+    )
     print(
         json.dumps(
             {
                 "run_id": result["run_id"],
                 "status": result["status"],
                 "execution_backend": "modal",
+                "artifact_mode": artifact_mode,
                 "artifact_path": str(artifact_path),
+                "remote_artifact_location": f"{RUNS_VOLUME_NAME}/{result['run_id']}",
             },
             sort_keys=True,
         )
