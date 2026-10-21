@@ -9,6 +9,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
@@ -123,6 +124,113 @@ def _build_image() -> modal.Image:
             remote_path=str(REMOTE_PROJECT_ROOT / "data" / "parser" / parser_dir.name),
         )
     return image
+
+
+def _recover_run_attempt(
+    *,
+    requested_run_id: str,
+    dataset: str,
+    architecture: str,
+    encoder: str,
+    seed: int,
+    purpose: str,
+) -> tuple[str, str | None, bool]:
+    """Return a safe run ID when Modal retries a preempted function input.
+
+    Modal can restart a preempted Function with the same arguments. The first
+    attempt may already have created its run directory, so retries must never
+    reuse that directory. Completed prior attempts are returned as-is; partial
+    attempts are marked interrupted and kept, and a fresh unique ID is used.
+    """
+    from aste_repro.training import create_run_id
+
+    runs_root = Path(str(REMOTE_RUNS_ROOT))
+    expected = {
+        "dataset": dataset,
+        "architecture": architecture,
+        "encoder": encoder,
+        "seed": int(seed),
+        "purpose": purpose,
+    }
+    matching: list[tuple[Path, dict[str, Any] | None]] = []
+    for candidate in runs_root.iterdir():
+        if not candidate.is_dir():
+            continue
+        manifest_path = candidate / "manifest.json"
+        if not manifest_path.is_file():
+            if candidate.name == requested_run_id:
+                matching.append((candidate, None))
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            if candidate.name == requested_run_id:
+                matching.append((candidate, None))
+            continue
+        metadata = manifest.get("execution_backend_metadata", {})
+        if (
+            candidate.name != requested_run_id
+            and metadata.get("requested_run_id") != requested_run_id
+        ):
+            continue
+        if any(manifest.get(key) != value for key, value in expected.items()):
+            raise RuntimeError(
+                f"existing Modal run {candidate.name} does not match the requested experiment"
+            )
+        matching.append((candidate, manifest))
+
+    for candidate, manifest in matching:
+        if manifest is not None and manifest.get("status") == "complete":
+            return candidate.name, None, True
+
+    recovered_from: str | None = None
+    for candidate, manifest in matching:
+        if manifest is None:
+            recovered_from = recovered_from or candidate.name
+            continue
+        status = manifest.get("status")
+        if status in {"running", "interrupted"}:
+            if status == "running":
+                manifest.update(
+                    {
+                        "status": "interrupted",
+                        "completed_at": datetime.now(timezone.utc).isoformat(),
+                        "failure_type": "ModalPreemptionRetry",
+                        "failure": (
+                            "Modal restarted this function input after container preemption; "
+                            "the partial attempt is preserved and a fresh run ID will be used."
+                        ),
+                    }
+                )
+                (candidate / "manifest.json").write_text(
+                    json.dumps(manifest, indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            recovered_from = recovered_from or candidate.name
+            continue
+        raise RuntimeError(
+            f"refusing to retry Modal run {candidate.name} with status {status!r}"
+        )
+
+    if matching:
+        RUNS_VOLUME.commit()
+        fresh_run_id = create_run_id(
+            dataset=dataset,
+            architecture=architecture,
+            encoder=encoder,
+            seed=seed,
+            purpose=purpose,
+        )
+        while (runs_root / fresh_run_id).exists():
+            fresh_run_id = create_run_id(
+                dataset=dataset,
+                architecture=architecture,
+                encoder=encoder,
+                seed=seed,
+                purpose=purpose,
+            )
+        return fresh_run_id, recovered_from, False
+    return requested_run_id, None, False
 
 
 image = _build_image()
@@ -279,6 +387,19 @@ def run_remote(
 ) -> dict[str, Any]:
     from aste_repro.training import run_experiment
 
+    requested_run_id = run_id
+    run_id, recovered_from, already_complete = _recover_run_attempt(
+        requested_run_id=requested_run_id,
+        dataset=dataset,
+        architecture=architecture,
+        encoder=encoder,
+        seed=seed,
+        purpose=purpose,
+    )
+    if already_complete:
+        RUNS_VOLUME.commit()
+        return {"run_id": run_id, "status": "complete"}
+
     backend_metadata = {
         "modal_sdk_version": importlib.metadata.version("modal"),
         "worker_python": platform.python_version(),
@@ -290,7 +411,10 @@ def run_remote(
         "cpu_request": 4,
         "memory_mib_request": 16_384,
         "function_timeout_seconds": 4 * 60 * 60,
+        "requested_run_id": requested_run_id,
     }
+    if recovered_from is not None:
+        backend_metadata["recovered_from_run_id"] = recovered_from
     try:
         result = run_experiment(
             dataset=dataset,
