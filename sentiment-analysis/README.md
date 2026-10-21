@@ -61,6 +61,50 @@ The matrix declares EMCGCN and the paper-informed SSGCN extension with mBERT,
 IndoBERT, XLM-RoBERTa, and DeBERTa-ABSA. CASA and HoASA-to-CASA transfer remain
 blocked until their sentiment-bearing human ASTE gold is frozen.
 
+## Optional Modal execution
+
+Modal runs on a single T4 GPU. The image starts from the locked Python 3.10
+environment, then replaces its CPU-only Torch wheel with pinned
+`torch==2.5.1+cu121`; the local runner remains CPU-only. The worker fails if
+CUDA is unavailable. The image uses the tracked runner, project metadata, and
+matrix; it stages only the HoASA/CASA source files, required CASA Label Studio
+exports, and pinned Stanza parser directory. Complete the source and parser
+setup above before running remotely. Authentication stays in your local Modal
+configuration. The persistent
+`aste-research-runs` Volume stores each unique run; after completion, only the
+new run directory is copied under `sentiment-analysis/runs/`. Modal compute
+and persistent storage may incur charges.
+
+Install the optional client and configure the local Modal profile:
+
+```bash
+uv sync --locked --python 3.10 --project sentiment-analysis --extra modal
+uv run --python 3.10 --project sentiment-analysis --extra modal modal setup
+```
+
+Run a small remote smoke:
+
+```bash
+uv run --python 3.10 --project sentiment-analysis --extra modal modal run \
+  sentiment-analysis/src/aste_repro/modal_runner.py \
+  --dataset hoasa --architecture emcgcn --encoder mbert \
+  --seed 52 --purpose smoke --smoke-examples 2
+```
+
+The Modal entrypoint accepts the existing `aste-run` arguments and defaults
+to smoke to avoid starting a full benchmark accidentally. Set
+`--purpose benchmark` only for an explicitly approved benchmark condition.
+The command prints the unique run ID, smoke/benchmark status, and local
+artifact path. Modal Volumes keep remote artifacts durable; the local copy
+uses the standard manifest, metrics, predictions, logs, and checkpoint layout.
+For large GPU matrices, add `--artifact-mode summary` to keep manifests,
+metrics, predictions, and logs locally while retaining checkpoints on the
+`aste-research-runs` Volume. The generated `modal-storage.json` records the
+remote run prefix and checkpoint hashes. The default `full` mode still copies
+the complete artifact directory locally.
+See [Modal Images](https://modal.com/docs/guide/images) and
+[Modal Volumes](https://modal.com/docs/guide/volumes) for the provider behavior.
+
 ## Research notebook
 
 Use [`notebooks/aste-reproduction-experiments.ipynb`](notebooks/aste-reproduction-experiments.ipynb) to inspect live and completed runs, launch an explicitly enabled benchmark condition or continue a missing HoASA seed matrix, summarize measured seed scores, and refresh the aggregate report. It delegates training to `aste-run`; execution is disabled by default and overlapping benchmark queues are rejected.
