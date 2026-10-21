@@ -15,10 +15,24 @@ from typing import Any
 import modal
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-REPOSITORY_ROOT = PROJECT_ROOT.parent
 REMOTE_PROJECT_ROOT = PurePosixPath("/opt/aste")
 REMOTE_RUNS_ROOT = PurePosixPath("/mnt/aste-research-runs")
+
+
+def _resolve_project_root() -> Path:
+    for parent in Path(__file__).resolve().parents:
+        if (parent / "pyproject.toml").is_file():
+            return parent
+
+    remote_root = Path(str(REMOTE_PROJECT_ROOT))
+    if (remote_root / "pyproject.toml").is_file():
+        return remote_root
+
+    raise RuntimeError("Could not locate the ASTE project root")
+
+
+PROJECT_ROOT = _resolve_project_root()
+REPOSITORY_ROOT = PROJECT_ROOT.parent
 RUNS_ROOT = PROJECT_ROOT / "runs"
 RUNS_VOLUME_NAME = "aste-research-runs"
 CORE_CODE_FILES = (
