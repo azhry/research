@@ -74,6 +74,7 @@ def _parser_dir() -> Path:
 def _build_image() -> modal.Image:
     image = (
         modal.Image.debian_slim(python_version="3.10")
+        .apt_install("git")
         .uv_sync(
             uv_project_dir=str(PROJECT_ROOT),
             extras=["modal"],
