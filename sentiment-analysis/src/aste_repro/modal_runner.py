@@ -83,10 +83,12 @@ def _build_image() -> modal.Image:
         )
         # Keep the project lock and local runner CPU-only; replace only the
         # Modal image's Torch wheel with the same release built for CUDA 12.1.
-        .pip_install(
+        .uv_pip_install(
             "torch==2.5.1+cu121",
             index_url="https://download.pytorch.org/whl/cu121",
             extra_index_url="https://pypi.org/simple",
+            extra_options="--index-strategy unsafe-best-match",
+            uv_version="0.10.10",
         )
         .env({"PYTHONPATH": f"{REMOTE_PROJECT_ROOT}/src"})
     )
