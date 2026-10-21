@@ -305,6 +305,19 @@ def _resolved_optimizer_groups(observer: dict[str, Any]) -> list[dict[str, Any]]
     return groups
 
 
+def create_run_id(
+    *,
+    dataset: str,
+    architecture: str,
+    encoder: str,
+    seed: int,
+    purpose: str,
+) -> str:
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    suffix = uuid.uuid4().hex[:8]
+    return f"{timestamp}-{dataset}-{architecture}-{encoder}-s{seed}-{purpose}-{suffix}"
+
+
 def run_experiment(
     *,
     dataset: str,
@@ -314,6 +327,11 @@ def run_experiment(
     purpose: str = "benchmark",
     smoke_examples: int = 24,
     download_parser: bool = False,
+    run_id: str | None = None,
+    runs_root: Path | None = None,
+    execution_backend: str = "local",
+    code_state: dict[str, Any] | None = None,
+    backend_metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     # Notebook kernels may export an inline backend that is unavailable in the
     # isolated Python 3.10 training process. PyABSA imports matplotlib during
@@ -321,6 +339,12 @@ def run_experiment(
     os.environ["MPLBACKEND"] = "Agg"
     if purpose not in {"smoke", "benchmark"}:
         raise ValueError("purpose must be `smoke` or `benchmark`")
+    if execution_backend not in {"local", "modal"}:
+        raise ValueError("execution_backend must be `local` or `modal`")
+    if execution_backend == "modal" and runs_root is None:
+        raise ValueError("Modal execution requires a persistent runs_root")
+    if run_id is not None and (run_id in {".", ".."} or "/" in run_id or "\\" in run_id):
+        raise ValueError("run_id must be a single path component")
     if dataset != "hoasa":
         readiness = audit_sources()
         if dataset == "casa" and not readiness["casa"]["aste_gold_ready"]:
@@ -352,11 +376,14 @@ def run_experiment(
     else:
         test_row_count = int(audit["hoasa"]["splits"]["test"]["sentences"])
 
-    run_id = (
-        f"{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-hoasa-"
-        f"{architecture}-{encoder}-s{seed}-{purpose}-{uuid.uuid4().hex[:8]}"
+    run_id = run_id or create_run_id(
+        dataset=dataset,
+        architecture=architecture,
+        encoder=encoder,
+        seed=seed,
+        purpose=purpose,
     )
-    run_dir = RUNS_ROOT / run_id
+    run_dir = (runs_root if runs_root is not None else RUNS_ROOT) / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     manifest_path = run_dir / "manifest.json"
     manifest: dict[str, Any] = {
@@ -372,6 +399,7 @@ def run_experiment(
         "encoder": encoder,
         "seed": int(seed),
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "execution_backend": execution_backend,
         "source_audit": audit,
         "source_files": {
             split: {"path": str(path.relative_to(ROOT)), "sha256": _sha256(path)}
@@ -386,12 +414,14 @@ def run_experiment(
             "pyabsa_internal_test_alias": "dev",
             "heldout_test_evaluations": 1,
         },
-        "code": _git_state(),
+        "code": code_state if code_state is not None else _git_state(),
         "code_file_hashes": {
             path.relative_to(ROOT).as_posix(): _sha256(path)
             for path in sorted((ROOT / "src" / "aste_repro").glob("*.py"))
         },
     }
+    if backend_metadata is not None:
+        manifest["execution_backend_metadata"] = backend_metadata
     _json_write(manifest_path, manifest)
     log_path = run_dir / "training.log"
 
