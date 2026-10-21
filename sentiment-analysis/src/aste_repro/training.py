@@ -383,7 +383,7 @@ def run_experiment(
         seed=seed,
         purpose=purpose,
     )
-    run_dir = (runs_root if runs_root is not None else RUNS_ROOT) / run_id
+    run_dir = (runs_root if runs_root is not None else RUNS_ROOT).resolve() / run_id
     run_dir.mkdir(parents=True, exist_ok=False)
     manifest_path = run_dir / "manifest.json"
     manifest: dict[str, Any] = {
