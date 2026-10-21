@@ -81,6 +81,14 @@ def _build_image() -> modal.Image:
             frozen=True,
             uv_version="0.10.10",
         )
+        # Keep the project lock and local runner CPU-only; replace only the
+        # Modal image's Torch wheel with the same release built for CUDA 12.1.
+        .uv_pip_install(
+            "torch==2.5.1+cu121",
+            index_url="https://download.pytorch.org/whl/cu121",
+            extra_index_url="https://pypi.org/simple",
+            uv_version="0.10.10",
+        )
         .env({"PYTHONPATH": f"{REMOTE_PROJECT_ROOT}/src"})
     )
 
@@ -227,6 +235,7 @@ def _download_run(run_id: str) -> Path:
 
 @app.function(
     image=image,
+    gpu="T4",
     cpu=4,
     memory=16_384,
     timeout=60 * 60,
@@ -250,7 +259,10 @@ def run_remote(
         "modal_sdk_version": importlib.metadata.version("modal"),
         "worker_python": platform.python_version(),
         "image_python": "3.10",
-        "accelerator": "cpu",
+        "accelerator": "nvidia-t4",
+        "gpu_type": "T4",
+        "gpu_required": True,
+        "torch_cuda_build": "2.5.1+cu121",
         "cpu_request": 4,
         "memory_mib_request": 16_384,
     }

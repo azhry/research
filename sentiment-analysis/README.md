@@ -63,12 +63,14 @@ blocked until their sentiment-bearing human ASTE gold is frozen.
 
 ## Optional Modal execution
 
-Modal execution uses the same locked Python 3.10 CPU environment as the local
-runner. The image uses the tracked runner, project metadata, and matrix; it
-stages only the HoASA/CASA source files, required CASA Label Studio exports,
-and pinned Stanza parser directory. Complete the source and parser setup above
-before running remotely. Authentication stays in your local Modal configuration.
-The persistent
+Modal runs on a single T4 GPU. The image starts from the locked Python 3.10
+environment, then replaces its CPU-only Torch wheel with pinned
+`torch==2.5.1+cu121`; the local runner remains CPU-only. The worker fails if
+CUDA is unavailable. The image uses the tracked runner, project metadata, and
+matrix; it stages only the HoASA/CASA source files, required CASA Label Studio
+exports, and pinned Stanza parser directory. Complete the source and parser
+setup above before running remotely. Authentication stays in your local Modal
+configuration. The persistent
 `aste-research-runs` Volume stores each unique run; after completion, only the
 new run directory is copied under `sentiment-analysis/runs/`. Modal compute
 and persistent storage may incur charges.

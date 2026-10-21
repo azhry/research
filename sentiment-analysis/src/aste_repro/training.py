@@ -445,6 +445,10 @@ def run_experiment(
         deterministic = _seed_runtime(torch, int(seed))
         resolved_model_dir, model_ref = _resolve_encoder(encoder, matrix)
         config = ASTEConfigManager.get_aste_config_base()
+        if backend_metadata is not None and backend_metadata.get("gpu_required"):
+            if not torch.cuda.is_available():
+                raise RunBlocked("Modal GPU was requested but CUDA is unavailable in the worker")
+            config.device = torch.device("cuda:0")
         config.pretrained_bert = str(resolved_model_dir)
         sequence_length_source_hashes = {
             split: _sha256(canonical_paths[split]) for split in ("train", "dev")
@@ -556,6 +560,10 @@ def run_experiment(
         finally:
             os.chdir(previous_cwd)
 
+        if backend_metadata is not None and backend_metadata.get("gpu_required"):
+            if torch.device(trainer.config.device).type != "cuda":
+                raise RunBlocked("Modal GPU was requested but PyABSA did not select CUDA")
+
         checkpoint_dir = Path(trainer.inference_model).resolve()
         if not checkpoint_dir.is_dir():
             raise RuntimeError("validation-selected checkpoint directory was not created")
@@ -583,6 +591,10 @@ def run_experiment(
                 "torch_device": str(trainer.config.device),
                 "cuda_available": bool(torch.cuda.is_available()),
                 "cuda_version": torch.version.cuda,
+                "cuda_device_name": (
+                    torch.cuda.get_device_name(0) if torch.cuda.is_available() else None
+                ),
+                "cuda_device_count": int(torch.cuda.device_count()),
                 "matplotlib_backend": os.environ["MPLBACKEND"],
             },
             "encoder": model_ref,
