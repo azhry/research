@@ -1,4 +1,25 @@
-# E5 baseline
+# CosQA code retrieval experiments
+
+> This project studies CoIR CosQA only. The active work is a reproduction and
+> ablation of the existing E5, Flan-T5-base HyDE, and general cross-encoder
+> workflow. The study specification is
+> [here](../.agents/knowledge/code-retrieval/research-spec.md).
+> APPS, Qwen, a second dataset, and remote-GPU execution are outside this scope.
+> CosQA test results have already been examined, so new test results are
+> retrospective and exploratory, not independent confirmation.
+
+## Study scope
+
+The existing four-system notebook is the reproduction baseline. The specification adds
+two focused representation checks—query plus generated text without fusion, and
+generated text alone—and one code-trained reranker comparison on the same E5
+candidate pool. The new code-trained model has not been run; it must pass a real
+weight-loading and finite-score preflight on CPU before a complete comparison.
+
+The R1 CosQA-only alternative is selected. R3's second-dataset request and
+Flan-T5-base quality concern remain unresolved and must be stated as limitations.
+The study makes no cross-dataset generalization claim and does not benchmark a
+stronger generator.
 
 `notebooks/e5_baseline_experiment.ipynb` is the smoke-friendly entry point for
 the CosQA E5-base-v2 baseline. The full-dataset entry point is
@@ -82,7 +103,9 @@ evaluator for every row. `nDCG@10` remains primary; the run also reports
 and keeps the original programming question alongside its hypothesis. The
 cross-encoder ranking is fused with E5 rather than replacing it. Fusion weights
 are selected on the complete `valid` qrels split, recorded with the run, and
-applied once to held-out `test`. Raw component scores remain diagnostics. The
+applied once to `test`. Since test results have already been examined, this is a
+retrospective/exploratory comparison, not independent confirmation. Raw component
+scores remain diagnostics. The
 combined row fuses the selected E5+HyDE and E5+reranker rankings. Resolved model
 revisions, fusion controls, component rankings, aggregate metrics, and a
 per-query metric export are saved with each run. The notebook adds paired
@@ -163,7 +186,8 @@ notebooks, caches, results, and metadata are ignored by Git; use a unique
 
 Fusion weights were selected using the complete `valid` split and are stored in
 `artifacts/e5_hyde_rerank/validation/weight_selection.json`. The four-system
-notebook reads those fixed weights and applies them once to held-out `test`.
+notebook reads those fixed weights and applies them to `test`. These results are
+retrospective/exploratory, as noted above.
 Keep that validation artifact with the ignored local artifacts when rerunning
 the notebook. Never select weights from test results. The removed standalone
 selection, ranking-verification, and result-assembly scripts are not part of

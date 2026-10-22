@@ -37,3 +37,9 @@ existing workflow, and document why it is needed.
 - Never use fake model responses or synthetic scores as evidence for model
   quality.
 - Separate measured findings from hypotheses and state material limitations.
+
+## File naming
+
+- For documentation and source files, use descriptive filenames without Linear issue IDs or other tracker codes. Keep issue IDs in Linear or pull request metadata, or in document text when traceability is useful.
+- Keep current guidance and project documents on stable, date-free filenames. Put dates in filenames only for immutable run outputs or dated audit artifacts.
+- Preserve existing run and artifact identities and paths, including tracker-coded ones; never rename or repoint historical artifacts.
