@@ -23,6 +23,8 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from runtime_costs import observe_module_batches
+
 
 CODE_VERSION = "e5-baseline-v5-runtime-and-notebook-cache-identity"
 RANKING_ORDER_POLICY = (
@@ -569,11 +571,17 @@ def save_json_cache(
 class E5Encoder:
     """Thin wrapper that makes E5's query/passage input contract explicit."""
 
-    def __init__(self, config: BaselineConfig):
+    def __init__(
+        self,
+        config: BaselineConfig,
+        *,
+        batch_observer: Callable[..., None] | None = None,
+    ):
         from sentence_transformers import SentenceTransformer
 
         self.config = config
         self.device = choose_device(config)
+        self.batch_observer = batch_observer
         self.model = SentenceTransformer(
             config.model_id,
             revision=config.model_revision,
@@ -581,16 +589,33 @@ class E5Encoder:
         )
         self.model.max_seq_length = config.max_seq_length
 
-    def _encode(self, texts: Sequence[str]) -> np.ndarray:
+    def _encode(self, texts: Sequence[str], *, stage: str) -> np.ndarray:
         if not texts:
             raise ValueError("cannot encode an empty text collection")
-        embeddings = self.model.encode(
-            list(texts),
-            batch_size=self.config.batch_size,
-            show_progress_bar=True,
-            convert_to_numpy=True,
-            normalize_embeddings=self.config.normalize_embeddings,
-        )
+        if self.batch_observer is not None:
+            with observe_module_batches(
+                self.model,
+                device=self.device,
+                stage=stage,
+                observer=self.batch_observer,
+                unit="passages" if stage == "corpus_encoding" else "queries",
+                fallback_batch_size=self.config.batch_size,
+            ):
+                embeddings = self.model.encode(
+                    list(texts),
+                    batch_size=self.config.batch_size,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                    normalize_embeddings=self.config.normalize_embeddings,
+                )
+        else:
+            embeddings = self.model.encode(
+                list(texts),
+                batch_size=self.config.batch_size,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+                normalize_embeddings=self.config.normalize_embeddings,
+            )
         embeddings = np.asarray(embeddings, dtype=np.float32)
         if embeddings.ndim != 2 or embeddings.shape[0] != len(texts):
             raise ValueError(f"unexpected embedding shape: {embeddings.shape}")
@@ -598,11 +623,11 @@ class E5Encoder:
             raise ValueError("model returned non-finite embeddings")
         return embeddings
 
-    def encode_queries(self, queries: Sequence[str]) -> np.ndarray:
-        return self._encode([self.config.query_prefix + text for text in queries])
+    def encode_queries(self, queries: Sequence[str], *, stage: str = "query_encoding") -> np.ndarray:
+        return self._encode([self.config.query_prefix + text for text in queries], stage=stage)
 
     def encode_corpus(self, passages: Sequence[str]) -> np.ndarray:
-        return self._encode([self.config.passage_prefix + text for text in passages])
+        return self._encode([self.config.passage_prefix + text for text in passages], stage="corpus_encoding")
 
 
 def rank_with_faiss(
@@ -612,6 +637,8 @@ def rank_with_faiss(
     corpus_ids: Sequence[str],
     *,
     top_k: int,
+    index: Any | None = None,
+    timing_observer: Callable[..., None] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Exact inner-product search using the paper's Faiss IndexFlat path.
 
@@ -632,16 +659,27 @@ def rank_with_faiss(
     if top_k <= 0:
         raise ValueError("top_k must be positive")
 
-    try:
-        faiss = importlib.import_module("faiss")
-    except ImportError as exc:
-        raise RuntimeError("faiss-cpu is required for the exact COIR baseline") from exc
-
     query_embeddings = np.ascontiguousarray(query_embeddings, dtype=np.float32)
     corpus_embeddings = np.ascontiguousarray(corpus_embeddings, dtype=np.float32)
-    index = faiss.IndexFlatIP(corpus_embeddings.shape[1])
-    index.add(corpus_embeddings)
+    if index is None:
+        index_started = time.perf_counter()
+        index = build_faiss_index(corpus_embeddings)
+        if timing_observer is not None:
+            timing_observer(
+                stage="faiss_index_build",
+                seconds=time.perf_counter() - index_started,
+                unit_count=len(corpus_ids),
+                unit="passages",
+            )
+    search_started = time.perf_counter()
     scores, positions = index.search(query_embeddings, min(top_k, len(corpus_ids)))
+    if timing_observer is not None:
+        timing_observer(
+            stage="faiss_search",
+            seconds=time.perf_counter() - search_started,
+            unit_count=len(query_ids),
+            unit="queries",
+        )
 
     rankings: dict[str, dict[str, float]] = {}
     for query_index, query_id in enumerate(query_ids):
@@ -652,6 +690,21 @@ def rank_with_faiss(
             row[str(corpus_ids[int(position)])] = float(score)
         rankings[str(query_id)] = row
     return rankings
+
+
+def build_faiss_index(corpus_embeddings: np.ndarray) -> Any:
+    """Build the exact inner-product index used by the COIR baseline."""
+
+    if corpus_embeddings.ndim != 2 or corpus_embeddings.shape[0] == 0:
+        raise ValueError("corpus embeddings must be a non-empty matrix")
+    try:
+        faiss = importlib.import_module("faiss")
+    except ImportError as exc:
+        raise RuntimeError("faiss-cpu is required for the exact COIR baseline") from exc
+    matrix = np.ascontiguousarray(corpus_embeddings, dtype=np.float32)
+    index = faiss.IndexFlatIP(matrix.shape[1])
+    index.add(matrix)
+    return index
 
 
 def evaluate_ndcg_at_10(

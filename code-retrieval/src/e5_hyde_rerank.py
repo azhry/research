@@ -20,8 +20,11 @@ from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import numpy as np
 
+from runtime_costs import RuntimeCostRecorder, observe_module_batches, synchronize_device
+
 from e5_baseline import (
     BaselineConfig,
+    build_faiss_index,
     CosQAData,
     E5Encoder,
     RunData,
@@ -42,7 +45,7 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v15-reproducible-selection"
+CODE_VERSION = "e5-hyde-rerank-v16-runtime-costs"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
 DEFAULT_RRF_K = 60
 DEFAULT_HYDE_PROMPT = (
@@ -240,7 +243,12 @@ def combine_hypotheses(
 class HyDEGenerator:
     """Local text-to-text generator used for real HyDE inference."""
 
-    def __init__(self, config: ExperimentConfig):
+    def __init__(
+        self,
+        config: ExperimentConfig,
+        *,
+        batch_observer: Callable[..., None] | None = None,
+    ):
         try:
             import torch
             from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
@@ -249,6 +257,7 @@ class HyDEGenerator:
 
         self.config = config
         self.torch = torch
+        self.batch_observer = batch_observer
         self.device = choose_device(config)
         self.tokenizer = AutoTokenizer.from_pretrained(
             config.hyde_model_id,
@@ -274,6 +283,8 @@ class HyDEGenerator:
         return prompts
 
     def _generate_batch(self, batch: Sequence[tuple[str, str]], *, sample: bool) -> list[list[str]]:
+        synchronize_device(self.device)
+        started = time.perf_counter()
         encoded = self.tokenizer(
             [prompt for _, prompt in batch],
             return_tensors="pt",
@@ -291,13 +302,14 @@ class HyDEGenerator:
             generation_kwargs["temperature"] = self.config.hyde_temperature
         with self.torch.no_grad():
             output = self.model.generate(**encoded, **generation_kwargs)
+        synchronize_device(self.device)
         decoded = self.tokenizer.batch_decode(output, skip_special_tokens=True)
         expected = len(batch) * self.config.hyde_num_hypotheses
         if len(decoded) != expected:
             raise RuntimeError(
                 f"HyDE generator returned {len(decoded)} outputs; expected {expected}"
             )
-        return [
+        result = [
             [
                 value.strip()
                 for value in decoded[
@@ -308,6 +320,14 @@ class HyDEGenerator:
             ]
             for index in range(len(batch))
         ]
+        if self.batch_observer is not None:
+            self.batch_observer(
+                stage="hyde_generation",
+                seconds=time.perf_counter() - started,
+                unit_count=len(batch),
+                unit="queries",
+            )
+        return result
 
     def generate(self, queries: Mapping[str, str]) -> dict[str, list[str]]:
         prompts = self._prompts(queries)
@@ -358,13 +378,19 @@ class HyDEGenerator:
 class CrossEncoderReranker:
     """Thin wrapper around the real sentence-transformers cross-encoder."""
 
-    def __init__(self, config: ExperimentConfig):
+    def __init__(
+        self,
+        config: ExperimentConfig,
+        *,
+        batch_observer: Callable[..., None] | None = None,
+    ):
         try:
             from sentence_transformers import CrossEncoder
         except ImportError as exc:
             raise RuntimeError("sentence-transformers is required for re-ranking") from exc
 
         self.config = config
+        self.batch_observer = batch_observer
         self.device = choose_device(config) if config.reranker_device == "auto" else config.reranker_device
         self.model = CrossEncoder(
             config.reranker_model_id,
@@ -379,12 +405,29 @@ class CrossEncoderReranker:
     def score_pairs(self, pairs: Sequence[tuple[str, str]]) -> np.ndarray:
         if not pairs:
             raise ValueError("cannot score an empty candidate set")
-        scores = self.model.predict(
-            list(pairs),
-            batch_size=self.config.reranker_batch_size,
-            show_progress_bar=True,
-            convert_to_numpy=True,
-        )
+        if self.batch_observer is None:
+            scores = self.model.predict(
+                list(pairs),
+                batch_size=self.config.reranker_batch_size,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+            )
+        else:
+            scoring_module = getattr(self.model, "model", self.model)
+            with observe_module_batches(
+                scoring_module,
+                device=self.device,
+                stage="cross_encoder_scoring",
+                observer=self.batch_observer,
+                unit="query_candidate_pairs",
+                fallback_batch_size=self.config.reranker_batch_size,
+            ):
+                scores = self.model.predict(
+                    list(pairs),
+                    batch_size=self.config.reranker_batch_size,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                )
         scores = np.asarray(scores, dtype=np.float32).reshape(-1)
         if scores.shape[0] != len(pairs) or not np.isfinite(scores).all():
             raise ValueError("cross-encoder returned invalid candidate scores")
@@ -1993,14 +2036,42 @@ def _embedding_or_cache(
     metadata_path: Path,
     metadata: Mapping[str, Any],
     encode: Callable[[], np.ndarray],
+    cost_recorder: RuntimeCostRecorder | None = None,
+    stage_name: str = "embedding",
+    category: str = "online_query",
+    item_count: int = 0,
 ) -> tuple[np.ndarray, float]:
+    load_started = time.perf_counter()
     cached = load_valid_embedding_cache(path, metadata_path, metadata)
+    load_seconds = time.perf_counter() - load_started
     if cached is not None:
+        if cost_recorder is not None:
+            cost_recorder.record_cache_stage(
+                name=stage_name,
+                category=category,
+                cache_hit=True,
+                load_seconds=load_seconds,
+                compute_seconds=0.0,
+                save_seconds=0.0,
+                item_count=item_count,
+            )
         return cached, 0.0
     started = time.perf_counter()
     embeddings = encode()
     elapsed = time.perf_counter() - started
+    save_started = time.perf_counter()
     save_embedding_cache(path, metadata_path, embeddings, metadata)
+    save_seconds = time.perf_counter() - save_started
+    if cost_recorder is not None:
+        cost_recorder.record_cache_stage(
+            name=stage_name,
+            category=category,
+            cache_hit=False,
+            load_seconds=load_seconds,
+            compute_seconds=elapsed,
+            save_seconds=save_seconds,
+            item_count=item_count,
+        )
     return embeddings, elapsed
 
 
@@ -2010,22 +2081,62 @@ def _json_or_cache(
     metadata_path: Path,
     metadata: Mapping[str, Any],
     produce: Callable[[], Mapping[str, Any]],
+    cost_recorder: RuntimeCostRecorder | None = None,
+    stage_name: str = "json_stage",
+    category: str = "online_query",
+    item_count: int = 0,
 ) -> tuple[dict[str, Any], float]:
+    load_started = time.perf_counter()
     cached = load_valid_json_cache(path, metadata_path, metadata)
+    load_seconds = time.perf_counter() - load_started
     if cached is not None:
+        if cost_recorder is not None:
+            cost_recorder.record_cache_stage(
+                name=stage_name,
+                category=category,
+                cache_hit=True,
+                load_seconds=load_seconds,
+                compute_seconds=0.0,
+                save_seconds=0.0,
+                item_count=item_count,
+            )
         return cached, 0.0
     started = time.perf_counter()
     value = dict(produce())
     elapsed = time.perf_counter() - started
     # Ranking dictionaries must retain Faiss/cross-encoder tie order across a
     # JSON cache round-trip; sorted keys would silently change metric results.
+    save_started = time.perf_counter()
     save_json_cache(path, metadata_path, value, metadata, sort_keys=False)
+    save_seconds = time.perf_counter() - save_started
+    if cost_recorder is not None:
+        cost_recorder.record_cache_stage(
+            name=stage_name,
+            category=category,
+            cache_hit=False,
+            load_seconds=load_seconds,
+            compute_seconds=elapsed,
+            save_seconds=save_seconds,
+            item_count=item_count,
+        )
     return value, elapsed
 
 
-def run_experiment(
+def _module_precision(module: Any) -> str | None:
+    candidate = getattr(module, "model", module)
+    parameters = getattr(candidate, "parameters", None)
+    if not callable(parameters):
+        return None
+    try:
+        return str(next(parameters()).dtype)
+    except (StopIteration, AttributeError, TypeError):
+        return None
+
+
+def _run_experiment(
     config: ExperimentConfig,
     *,
+    cost_recorder: RuntimeCostRecorder,
     repo_root: Path,
     notebook_sha256: str | None = None,
     source_notebook_sha256: str | None = None,
@@ -2035,6 +2146,14 @@ def run_experiment(
     """Select on valid or evaluate test using the existing ordered workflow."""
 
     set_seed(config.seed)
+    selected_device = choose_device(config)
+    if selected_device.startswith("cuda"):
+        try:
+            import torch
+
+            cost_recorder.set_cuda_device(torch, selected_device)
+        except ImportError:
+            pass
     pre_model_environment = environment_metadata(config, repo_root=repo_root)
     selection_manifest: dict[str, Any] | None = None
     test_boundary: dict[str, Any] | None = None
@@ -2060,8 +2179,10 @@ def run_experiment(
             reranker_fusion_weights=tuple(selection["e5_rerank"]["selected"]["weights"]),
             combined_fusion_weights=tuple(selection["e5_hyde_rerank"]["selected"]["weights"]),
         )
-    data = load_cosqa(config)
-    run_data = select_run_data(data, config)
+    with cost_recorder.phase("dataset_load", "startup"):
+        data = load_cosqa(config)
+    with cost_recorder.phase("run_population_selection", "startup"):
+        run_data = select_run_data(data, config)
     if config.run_mode == "benchmark" and (
         len(run_data.queries) != len(data.queries) or len(run_data.corpus) != len(data.corpus)
     ):
@@ -2114,15 +2235,28 @@ def run_experiment(
             test_boundary=test_boundary,
         )
 
-    encoder = E5Encoder(config)
+    with cost_recorder.phase("model_load_e5", "startup"):
+        encoder = E5Encoder(config, batch_observer=cost_recorder.observe_batch)
     e5_revision = _revision_for_configured_model(config.model_revision, encoder.model, "E5")
-    hyde = HyDEGenerator(config)
+    with cost_recorder.phase("model_load_hyde", "startup"):
+        hyde = HyDEGenerator(config, batch_observer=cost_recorder.observe_batch)
     hyde_revision = hyde.resolved_revision
-    reranker = CrossEncoderReranker(config)
+    with cost_recorder.phase("model_load_reranker", "startup"):
+        reranker = CrossEncoderReranker(config, batch_observer=cost_recorder.observe_batch)
     reranker_revision = reranker.resolved_revision
     revisions = ModelRevisions(e5=e5_revision, hyde=hyde_revision, reranker=reranker_revision)
     environment = environment_metadata(config, repo_root=repo_root)
     environment["model_revisions"] = revisions.as_dict()
+    environment["model_precision"] = {
+        "e5": _module_precision(encoder.model),
+        "hyde": _module_precision(hyde.model),
+        "reranker": _module_precision(reranker.model),
+    }
+    environment["model_devices"] = {
+        "e5": encoder.device,
+        "hyde": hyde.device,
+        "reranker": reranker.device,
+    }
     identity = experiment_identity(
         config,
         revisions,
@@ -2145,6 +2279,10 @@ def run_experiment(
         metadata_path=paths.corpus_metadata,
         metadata=corpus_meta,
         encode=lambda: encoder.encode_corpus(corpus_texts),
+        cost_recorder=cost_recorder,
+        stage_name="corpus_embeddings",
+        category="offline_corpus_encoding",
+        item_count=len(corpus_texts),
     )
     original_query_meta = cache_metadata(
         config, revisions, identity=identity, kind="original_query_embeddings", ids=query_ids, repo_root=repo_root
@@ -2153,7 +2291,13 @@ def run_experiment(
         path=paths.original_query_embeddings,
         metadata_path=paths.original_query_metadata,
         metadata=original_query_meta,
-        encode=lambda: encoder.encode_queries(list(query_texts.values())),
+        encode=lambda: encoder.encode_queries(
+            list(query_texts.values()), stage="original_query_encoding"
+        ),
+        cost_recorder=cost_recorder,
+        stage_name="original_query_embeddings",
+        category="online_query",
+        item_count=len(query_texts),
     )
 
     hyde_ids = query_ids
@@ -2165,17 +2309,22 @@ def run_experiment(
         metadata_path=paths.hyde_generations_metadata,
         metadata=hyde_meta,
         produce=lambda: hyde.generate(query_texts),
+        cost_recorder=cost_recorder,
+        stage_name="hyde_generation",
+        category="query_generation",
+        item_count=len(query_texts),
     )
     environment["hyde_fallback_query_count"] = len(hyde.fallback_query_ids)
     hyde.close()
-    hyde_representations = {
-        query_id: combine_hypotheses(
-            query_texts[query_id],
-            [str(value) for value in generated[query_id]],
-            strategy=config.hyde_combination_strategy,
-        )
-        for query_id in query_ids
-    }
+    with cost_recorder.phase("hyde_representation", "online_query"):
+        hyde_representations = {
+            query_id: combine_hypotheses(
+                query_texts[query_id],
+                [str(value) for value in generated[query_id]],
+                strategy=config.hyde_combination_strategy,
+            )
+            for query_id in query_ids
+        }
     hyde_query_meta = cache_metadata(
         config,
         revisions,
@@ -2189,8 +2338,31 @@ def run_experiment(
         path=paths.hyde_query_embeddings,
         metadata_path=paths.hyde_query_metadata,
         metadata=hyde_query_meta,
-        encode=lambda: encoder.encode_queries(list(hyde_representations.values())),
+        encode=lambda: encoder.encode_queries(
+            list(hyde_representations.values()), stage="hyde_query_encoding"
+        ),
+        cost_recorder=cost_recorder,
+        stage_name="hyde_query_embeddings",
+        category="online_query",
+        item_count=len(hyde_representations),
     )
+
+    faiss_index: Any | None = None
+
+    def rank_queries(query_embeddings: np.ndarray) -> dict[str, dict[str, float]]:
+        nonlocal faiss_index
+        if faiss_index is None:
+            with cost_recorder.phase("faiss_index_build", "offline_index"):
+                faiss_index = build_faiss_index(corpus_embeddings)
+        return rank_with_faiss(
+            query_embeddings,
+            corpus_embeddings,
+            query_ids,
+            corpus_ids,
+            top_k=config.candidate_depth,
+            index=faiss_index,
+            timing_observer=cost_recorder.observe_batch,
+        )
 
     ranking_ids = query_ids + ["__corpus__"] + corpus_ids
     original_rank_meta = cache_metadata(
@@ -2200,13 +2372,11 @@ def run_experiment(
         path=paths.original_rankings,
         metadata_path=paths.original_rankings_metadata,
         metadata=original_rank_meta,
-        produce=lambda: rank_with_faiss(
-            original_query_embeddings,
-            corpus_embeddings,
-            query_ids,
-            corpus_ids,
-            top_k=config.candidate_depth,
-        ),
+        produce=lambda: rank_queries(original_query_embeddings),
+        cost_recorder=cost_recorder,
+        stage_name="original_rankings",
+        category="query_search",
+        item_count=len(query_ids),
     )
     hyde_rank_meta = cache_metadata(
         config, revisions, identity=identity, kind="hyde_rankings", ids=ranking_ids, repo_root=repo_root
@@ -2215,13 +2385,11 @@ def run_experiment(
         path=paths.hyde_rankings,
         metadata_path=paths.hyde_rankings_metadata,
         metadata=hyde_rank_meta,
-        produce=lambda: rank_with_faiss(
-            hyde_query_embeddings,
-            corpus_embeddings,
-            query_ids,
-            corpus_ids,
-            top_k=config.candidate_depth,
-        ),
+        produce=lambda: rank_queries(hyde_query_embeddings),
+        cost_recorder=cost_recorder,
+        stage_name="hyde_rankings",
+        category="query_search",
+        item_count=len(query_ids),
     )
 
     original_rerank_meta = cache_metadata(
@@ -2238,6 +2406,10 @@ def run_experiment(
         metadata_path=paths.original_reranked_metadata,
         metadata=original_rerank_meta,
         produce=lambda: reranker.rerank(query_texts, run_data.corpus, original_rankings),
+        cost_recorder=cost_recorder,
+        stage_name="original_reranked",
+        category="query_reranking",
+        item_count=sum(len(ranking) for ranking in original_rankings.values()),
     )
     if config.run_mode == "benchmark":
         for label, ranking in (
@@ -2307,6 +2479,10 @@ def run_experiment(
             top_k=config.candidate_depth,
             rrf_k=config.rrf_k,
         ),
+        cost_recorder=cost_recorder,
+        stage_name="hyde_fusion",
+        category="online_query",
+        item_count=len(query_ids),
     )
     rerank_fused_meta = cache_metadata(
         config, revisions, identity=identity, kind="e5_rerank_fused_rankings", ids=ranking_ids, repo_root=repo_root
@@ -2321,6 +2497,10 @@ def run_experiment(
             top_k=config.candidate_depth,
             rrf_k=config.rrf_k,
         ),
+        cost_recorder=cost_recorder,
+        stage_name="reranker_fusion",
+        category="online_query",
+        item_count=len(query_ids),
     )
     combined_fused_meta = cache_metadata(
         config, revisions, identity=identity, kind="e5_hyde_rerank_fused_rankings", ids=ranking_ids, repo_root=repo_root
@@ -2335,17 +2515,21 @@ def run_experiment(
             top_k=config.candidate_depth,
             rrf_k=config.rrf_k,
         ),
+        cost_recorder=cost_recorder,
+        stage_name="combined_fusion",
+        category="online_query",
+        item_count=len(query_ids),
     )
-    evaluation_started = time.perf_counter()
-    metric_by_system: dict[str, Mapping[str, Any]] = {
-        "e5": evaluate_ndcg_at_10(run_data.qrels, original_rankings, cutoff=10),
-        "e5_hyde": evaluate_ndcg_at_10(run_data.qrels, fused_hyde, cutoff=10),
-        "e5_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_rerank, cutoff=10),
-        "e5_hyde_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_hyde_reranked, cutoff=10),
-        "e5_hyde_raw": evaluate_ndcg_at_10(run_data.qrels, hyde_rankings, cutoff=10),
-        "e5_rerank_raw": evaluate_ndcg_at_10(run_data.qrels, original_reranked, cutoff=10),
-    }
-    evaluation_seconds = time.perf_counter() - evaluation_started
+    with cost_recorder.phase("metric_evaluation", "evaluation"):
+        metric_by_system: dict[str, Mapping[str, Any]] = {
+            "e5": evaluate_ndcg_at_10(run_data.qrels, original_rankings, cutoff=10),
+            "e5_hyde": evaluate_ndcg_at_10(run_data.qrels, fused_hyde, cutoff=10),
+            "e5_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_rerank, cutoff=10),
+            "e5_hyde_rerank": evaluate_ndcg_at_10(run_data.qrels, fused_hyde_reranked, cutoff=10),
+            "e5_hyde_raw": evaluate_ndcg_at_10(run_data.qrels, hyde_rankings, cutoff=10),
+            "e5_rerank_raw": evaluate_ndcg_at_10(run_data.qrels, original_reranked, cutoff=10),
+        }
+        evaluation_seconds = cost_recorder.phase_timings[-1]["seconds"]
     timings = {
         "corpus_encoding": corpus_seconds,
         "original_query_encoding": original_query_seconds,
@@ -2413,6 +2597,9 @@ def run_experiment(
             "pool_policy": "union_of_selected_component_rankings_truncated_to_candidate_depth",
         },
     }
+    result["reranked_candidate_pair_count"] = sum(
+        len(ranking) for ranking in original_reranked.values()
+    )
     artifacts = write_comparison_artifacts(
         config,
         result,
@@ -2433,6 +2620,196 @@ def run_experiment(
             "combined_fused": combined_fused_meta,
         },
     )
+    return result, artifacts
+
+
+def _runtime_cost_csv_rows(costs: Mapping[str, Any]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+
+    def add_row(
+        *,
+        measurement_kind: str,
+        stage: str,
+        category: str,
+        elapsed_seconds: float,
+        cache_status: str = "",
+        unit_count: int | None = None,
+        unit: str = "",
+    ) -> None:
+        rows.append(
+            {
+                "schema_version": costs["schema_version"],
+                "run_id": costs["run_id"],
+                "cache_identity": costs["cache_identity"],
+                "evidence_level": costs["evidence_level"],
+                "measurement_kind": measurement_kind,
+                "stage": stage,
+                "category": category,
+                "cache_status": cache_status,
+                "elapsed_seconds": float(elapsed_seconds),
+                "unit_count": unit_count,
+                "unit": unit,
+            }
+        )
+
+    for item in costs["cache_stages"]:
+        for component in ("cache_load", "compute", "cache_save"):
+            add_row(
+                measurement_kind=component,
+                stage=item["name"],
+                category=item["category"],
+                elapsed_seconds=item[f"{component}_seconds"]
+                if component != "compute"
+                else item["compute_seconds"],
+                cache_status=item["cache_status"],
+                unit_count=item["item_count"],
+            )
+    for item in costs["phase_timings"]:
+        add_row(
+            measurement_kind="phase",
+            stage=item["name"],
+            category=item["category"],
+            elapsed_seconds=item["seconds"],
+        )
+    for item in costs["batch_observations"]:
+        add_row(
+            measurement_kind="batch_latency",
+            stage=item["stage"],
+            category="model_or_retrieval_batch",
+            elapsed_seconds=item["seconds"],
+            unit_count=item["unit_count"],
+            unit=item["unit"],
+        )
+    add_row(
+        measurement_kind="pipeline_wall",
+        stage="pipeline",
+        category="end_to_end",
+        elapsed_seconds=costs["pipeline_wall_seconds"],
+    )
+    add_row(
+        measurement_kind="online_query_cost",
+        stage="online_query_path",
+        category="end_to_end_query_cost",
+        elapsed_seconds=costs["end_to_end_query_cost"]["online_stage_seconds"],
+        unit_count=costs["end_to_end_query_cost"]["query_count"],
+        unit="queries",
+    )
+    return rows
+
+
+def _write_runtime_cost_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
+    fields = [
+        "schema_version",
+        "run_id",
+        "cache_identity",
+        "evidence_level",
+        "measurement_kind",
+        "stage",
+        "category",
+        "cache_status",
+        "elapsed_seconds",
+        "unit_count",
+        "unit",
+    ]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    with temporary.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({field: row.get(field) for field in fields})
+    temporary.replace(path)
+
+
+def _persist_runtime_costs(
+    result: dict[str, Any],
+    artifacts: dict[str, str],
+    costs: Mapping[str, Any],
+) -> dict[str, str]:
+    run_dir = Path(artifacts.get("run_dir") or Path(artifacts["result"]).parent)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    cost_json_path = run_dir / "runtime_costs.json"
+    cost_csv_path = run_dir / "runtime_costs.csv"
+    _json_write(cost_json_path, dict(costs))
+    cost_rows = _runtime_cost_csv_rows(costs)
+    _write_runtime_cost_csv(cost_csv_path, cost_rows)
+
+    result["runtime_costs"] = dict(costs)
+    result["cost_observations"] = {
+        "local_model_inference": any(
+            item["stage"]
+            in {"corpus_encoding", "original_query_encoding", "hyde_query_encoding", "hyde_generation", "cross_encoder_scoring"}
+            for item in costs["batch_observations"]
+        ),
+        "gpu_memory_captured": costs["memory"]["gpu_peak_allocated_bytes"] is not None,
+        "latency_is_wall_clock_seconds": True,
+        "runtime_costs_json": str(cost_json_path),
+        "runtime_costs_csv": str(cost_csv_path),
+    }
+    metadata_path = Path(artifacts.get("run_metadata", artifacts["metadata"]))
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8")) if metadata_path.exists() else {}
+    metadata["result"] = dict(result)
+    metadata.setdefault("artifacts", {})["runtime_costs"] = {
+        "json_path": str(cost_json_path),
+        "json_sha256": sha256_file(cost_json_path),
+        "csv_path": str(cost_csv_path),
+        "csv_sha256": sha256_file(cost_csv_path),
+        "row_count": len(cost_rows),
+    }
+    if artifacts.get("run_result"):
+        _json_write(artifacts["run_result"], result)
+    if artifacts.get("result"):
+        _json_write(artifacts["result"], result)
+    if artifacts.get("run_metadata"):
+        _json_write(artifacts["run_metadata"], metadata)
+    if artifacts.get("metadata"):
+        _json_write(artifacts["metadata"], metadata)
+    artifacts["runtime_costs_json"] = str(cost_json_path)
+    artifacts["runtime_costs_csv"] = str(cost_csv_path)
+    return artifacts
+
+
+def run_experiment(
+    config: ExperimentConfig,
+    *,
+    repo_root: Path,
+    notebook_sha256: str | None = None,
+    source_notebook_sha256: str | None = None,
+    selection_manifest_path: str | Path | None = None,
+    ranking_replay: Mapping[str, Any] | None = None,
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Run the experiment and attach measured costs to its existing artifacts."""
+
+    with RuntimeCostRecorder() as recorder:
+        result, artifacts = _run_experiment(
+            config,
+            cost_recorder=recorder,
+            repo_root=repo_root,
+            notebook_sha256=notebook_sha256,
+            source_notebook_sha256=source_notebook_sha256,
+            selection_manifest_path=selection_manifest_path,
+            ranking_replay=ranking_replay,
+        )
+    environment = result.get("environment", {})
+    index_build_seconds = sum(
+        item["seconds"]
+        for item in recorder.phase_timings
+        if item["name"] == "faiss_index_build"
+    )
+    costs = recorder.summary(
+        run_id=str(result.get("run_id") or "unidentified"),
+        cache_identity=str(result.get("cache_identity") or "unidentified"),
+        status=str(result.get("status") or "unknown"),
+        run_mode=str(result.get("run_mode") or config.run_mode),
+        environment=environment,
+        config=config,
+        query_count=int(result.get("query_count") or 0),
+        corpus_count=int(result.get("corpus_count") or 0),
+        reranked_pair_count=int(result.get("reranked_candidate_pair_count") or 0),
+        model_precision=environment.get("model_precision", {}),
+        offline_index_build_seconds=index_build_seconds,
+    )
+    artifacts = _persist_runtime_costs(result, artifacts, costs)
     return result, artifacts
 
 
