@@ -94,32 +94,65 @@ output is written below `code-retrieval/artifacts/e5_baseline_full/`. Both are
 ignored by Git. Caches are stored by cache identity, while the artifact
 directory's `result.json` and `metadata.json` show the latest run.
 
-`notebooks/e5_hyde_rerank_experiment.ipynb` runs the controlled four-system
-comparison required by the study: E5, E5 + HyDE, E5 + re-ranking, and E5 +
-HyDE + re-ranking. It uses the same CosQA data, paper-faithful E5
-`IndexFlatIP` retrieval at candidate depth 1,000, qrels, and the pinned COIR
-evaluator for every row. `nDCG@10` remains primary; the run also reports
-`MAP@10`, `Recall@10`, and `Recall@1000`. HyDE uses the pinned `google/flan-t5-base` generator
-and keeps the original programming question alongside its hypothesis. The
-cross-encoder ranking is fused with E5 rather than replacing it. Fusion weights
-are selected on the complete `valid` qrels split, recorded with the run, and
-applied once to `test`. Since test results have already been examined, this is a
-retrospective/exploratory comparison, not independent confirmation. Raw component
-scores remain diagnostics. The
-combined row fuses the selected E5+HyDE and E5+reranker rankings. Resolved model
-revisions, fusion controls, component rankings, aggregate metrics, and a
-per-query metric export are saved with each run. The notebook adds paired
-20,000-replicate query-bootstrap intervals for secondary-metric differences;
-smoke output is wiring evidence only.
+`notebooks/e5_hyde_rerank_experiment.ipynb` is the ordered entry point for the
+four-system comparison: E5, E5 + HyDE, E5 + re-ranking, and E5 + HyDE +
+re-ranking. It uses the pinned CosQA corpus and query revision, depth-1,000
+E5 retrieval, RRF with `k=60`, the official COIR evaluator, and `nDCG@10` as
+the selection metric. HyDE keeps the original programming question with its
+generated hypothesis; the cross-encoder reorders the same E5 candidate pool.
+The combined system fuses the two selected component rankings.
+
+Run validation selection and test evaluation as two separate notebook
+executions. From the `code-retrieval` directory, first use benchmark mode with
+the complete `valid` split. Replace `RUNID` with a unique output suffix:
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_full.executed.ipynb --output-dir artifacts/e5_hyde_rerank
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh527 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh527/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_selection.executed.ipynb --output-dir artifacts/azh527/notebooks/selection-RUNID
 ```
 
-Comparison output and caches are written below
-`code-retrieval/artifacts/e5_hyde_rerank/`, which is ignored by Git. Set a new,
-timestamped `--output-dir` on each nbconvert invocation to preserve an executed
-notebook for that run.
+The selection run evaluates all 21 weights from 0.00 through 1.00, in 0.05
+steps, for E5 + HyDE, E5 + reranker, and the combined ranking. It chooses by
+`nDCG@10` rounded to five decimals and prefers the higher first-input weight on
+a tie. The notebook prints a unique immutable manifest path and digest. Copy
+that exact path for the next execution with the complete `test` split, and use
+a new `RUNID` for its notebook-output directory:
+
+```bash
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SELECTION_MANIFEST=artifacts/azh527/selection_runs/SELECTIONID/selection_manifest.json E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh527 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh527/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_test.executed.ipynb --output-dir artifacts/azh527/notebooks/test-RUNID
+```
+
+Test evaluation fails closed if the manifest digest, dataset/model controls,
+runtime, source or notebook hashes, validation baseline parity, or valid/test
+query-ID and normalized-text boundary fails. The manifest contains full valid
+and test-population fingerprints, qrels/corpus digests, rankings and metadata
+hashes, every sweep score, selected weights, and the declared evaluator/tie
+policy. It does not store raw query text or test labels in the selection stage.
+Baseline parity is checked against the audited `nDCG@10` references 0.44119 on
+valid and 0.45876 on test, with absolute tolerance 0.00001.
+
+For PowerShell, set the same variables with `$env:E5_HYDE_RERANK_MODE='benchmark'`
+and `$env:E5_HYDE_RERANK_QRELS_SPLIT='valid'` or `'test'` before running the
+`python -m nbconvert` command. The test results were already examined, so this
+evaluation is retrospective and exploratory, not independent confirmation.
+Smoke runs remain wiring evidence only.
+
+The notebook's tagged query-level and secondary-metric analyses are optional
+and skipped by default. Set `E5_HYDE_RERANK_RUN_POSTHOC=1` when the separate
+AZH-519 analysis artifacts are available and those analyses are intended.
+
+An optional `E5_HYDE_RERANK_RANKING_REPLAY=historical` mode can replay the
+preserved real-model ranking artifacts when `E5_HYDE_RERANK_RANKING_REPLAY_ROOT`
+points to the historical `artifacts` directory. It verifies the saved file
+hashes, pinned revisions, split, population, candidate contract, and original
+run record. Replay performs no new model inference and is labeled
+`cache_replay`; it is not a new benchmark run. The historical
+`artifacts/e5_hyde_rerank/validation/weight_selection.json` is kept unchanged
+as a hash/provenance reference and is no longer the source of applied weights.
+
+Run outputs and executed notebooks are ignored local research artifacts. Keep
+the task-specific artifact and cache directories separate from the historical
+study directory, and use a new `--output-dir` for every notebook execution.
+Each comparison run and selection manifest is written under a unique run ID.
 
 ## E5 + rerank
 
@@ -184,14 +217,12 @@ HyDE output is written below `code-retrieval/artifacts/e5_hyde/`. Generated
 notebooks, caches, results, and metadata are ignored by Git; use a unique
 `--output-dir` for each run when preserving executed notebooks.
 
-Fusion weights were selected using the complete `valid` split and are stored in
-`artifacts/e5_hyde_rerank/validation/weight_selection.json`. The four-system
-notebook reads those fixed weights and applies them to `test`. These results are
-retrospective/exploratory, as noted above.
-Keep that validation artifact with the ignored local artifacts when rerunning
-the notebook. Never select weights from test results. The removed standalone
-selection, ranking-verification, and result-assembly scripts are not part of
-the notebook workflow.
+The historical selection record at
+`artifacts/e5_hyde_rerank/validation/weight_selection.json` remains preserved.
+The combined notebook now recomputes all validation sweeps and applies weights
+only from the emitted, hash-verified manifest; it does not read the historical
+fixed-weight record as the decision source. Never select weights from test
+results.
 
 The official COIR evaluator receives unique ordinal scores that preserve each
 artifact's descending score order and saved insertion order for ties. This

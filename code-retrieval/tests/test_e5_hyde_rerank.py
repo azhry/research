@@ -12,7 +12,14 @@ from e5_hyde_rerank import (
     cache_metadata,
     candidate_contract,
     combine_hypotheses,
+    corpus_fingerprint,
     experiment_identity,
+    query_population_fingerprint,
+    seal_selection_manifest,
+    _select_rrf_weights,
+    validate_selection_manifest,
+    validate_test_population_boundary,
+    verify_selection_manifest_integrity,
     rerank_candidate_rankings,
     reciprocal_rank_fusion,
     write_comparison_artifacts,
@@ -23,7 +30,7 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
     assert config.candidate_depth == 1000
-    assert CODE_VERSION == "e5-hyde-rerank-v13-auditable-component-rrf"
+    assert CODE_VERSION == "e5-hyde-rerank-v15-reproducible-selection"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
     assert config.hyde_combination_strategy == "query_plus_hypotheses"
@@ -126,6 +133,130 @@ def test_candidate_contract_records_ordered_ids_and_population():
     assert len(contract["ordered_candidate_ids_sha256"]) == 64
 
 
+def test_selection_sweep_uses_real_evaluator_and_prefers_higher_first_weight_on_ties():
+    qrels = {"q1": {"d1": 1}}
+    same_ranking = {"q1": {"d1": 3.0, "d2": 2.0, "d3": 1.0}}
+
+    sweep, selected_ranking = _select_rrf_weights(
+        qrels,
+        same_ranking,
+        same_ranking,
+        rrf_k=60,
+        candidate_depth=3,
+    )
+
+    assert len(sweep["grid"]) == 21
+    assert sweep["selected"]["weights"] == [1.0, 0.0]
+    assert len({row["selection_ndcg_at_10"] for row in sweep["grid"]}) == 1
+    assert list(selected_ranking["q1"]) == ["d1", "d2", "d3"]
+
+
+def test_query_population_fingerprint_normalizes_text_and_preserves_query_ids():
+    fingerprint = query_population_fingerprint(
+        {"q1": "  Find\tA parser ", "q2": "find a PARSER", "q3": "another query"}
+    )
+
+    assert fingerprint["query_count"] == 3
+    assert fingerprint["query_ids"] == ["q1", "q2", "q3"]
+    assert fingerprint["query_group_count"] == 2
+    duplicate_group = next(
+        group for group in fingerprint["query_groups"] if group["query_ids"] == ["q1", "q2"]
+    )
+    assert len(duplicate_group["normalized_text_sha256"]) == 64
+
+
+def test_selection_manifest_digest_detects_mutation():
+    manifest = seal_selection_manifest(
+        {"schema": "test", "sweeps": {"e5_hyde": {"selected": [0.65, 0.35]}}}
+    )
+
+    assert len(verify_selection_manifest_integrity(manifest)) == 64
+    manifest["sweeps"]["e5_hyde"]["selected"] = [0.5, 0.5]
+    try:
+        verify_selection_manifest_integrity(manifest)
+    except ValueError as error:
+        assert "integrity digest" in str(error)
+    else:
+        raise AssertionError("a modified selection manifest passed its digest check")
+
+
+def test_test_evaluation_rejects_a_missing_selection_manifest(tmp_path):
+    try:
+        validate_selection_manifest(
+            tmp_path / "missing-selection.json",
+            ExperimentConfig(run_mode="benchmark", qrels_split="test"),
+            repo_root=Path(__file__).resolve().parents[2],
+            notebook_sha256=None,
+            source_notebook_sha256=None,
+            environment={},
+        )
+    except FileNotFoundError as error:
+        assert "required validation-selection manifest" in str(error)
+    else:
+        raise AssertionError("test evaluation accepted an absent selection manifest")
+
+
+def test_test_evaluation_rejects_manifest_with_mismatched_controls(tmp_path):
+    config = ExperimentConfig(run_mode="benchmark", qrels_split="test")
+    manifest_path = tmp_path / "selection.json"
+    manifest_path.write_text(
+        json.dumps(
+            seal_selection_manifest(
+                {
+                    "schema": "azh-527-validation-selection-v1",
+                    "code_version": CODE_VERSION,
+                    "status": "complete",
+                    "selection_qrels_split": "valid",
+                    "target_evaluation_qrels_split": "test",
+                    "baseline_parity": {"passed": True},
+                    "controls": {"runtime_controls": {"candidate_depth": 10}},
+                }
+            ),
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        validate_selection_manifest(
+            manifest_path,
+            config,
+            repo_root=Path(__file__).resolve().parents[2],
+            notebook_sha256=None,
+            source_notebook_sha256=None,
+            environment={},
+        )
+    except ValueError as error:
+        assert "controls do not match" in str(error)
+    else:
+        raise AssertionError("test evaluation accepted a mismatched selection manifest")
+
+
+def test_test_population_boundary_rejects_normalized_query_overlap():
+    corpus = {f"d{index}": {"text": f"document {index}"} for index in range(20604)}
+    valid_queries = {f"v{index}": f"valid query {index}" for index in range(500)}
+    test_queries = {f"t{index}": f"test query {index}" for index in range(500)}
+    test_queries["t0"] = "  VALID\tQUERY 0 "
+    manifest = {
+        "selection_population": {
+            "queries": query_population_fingerprint(valid_queries),
+            "corpus": corpus_fingerprint(corpus),
+        }
+    }
+    run_data = RunData(
+        corpus=corpus,
+        queries=test_queries,
+        qrels={query_id: {"d0": 1} for query_id in test_queries},
+    )
+
+    try:
+        validate_test_population_boundary(manifest, run_data)
+    except ValueError as error:
+        assert "normalized query text overlaps" in str(error)
+    else:
+        raise AssertionError("test evaluation accepted normalized query overlap")
+
+
 def test_ranking_cache_round_trip_preserves_equal_score_order(tmp_path):
     data_path = tmp_path / "rankings.json"
     metadata_path = tmp_path / "rankings.metadata.json"
@@ -198,12 +329,21 @@ def test_comparison_result_contains_four_rows_and_deltas():
         exclusions=[],
     )
     metrics = {
-        "e5": {"ndcg_at_10": 0.5},
-        "e5_hyde": {"ndcg_at_10": 0.6},
-        "e5_rerank": {"ndcg_at_10": 0.55},
-        "e5_hyde_rerank": {"ndcg_at_10": 0.7},
-        "e5_hyde_raw": {"ndcg_at_10": 0.3},
-        "e5_rerank_raw": {"ndcg_at_10": 0.4},
+        system_id: {
+            "ndcg_at_10": ndcg,
+            "map_at_10": ndcg * 0.8,
+            "recall_at_10": ndcg * 0.7,
+            "precision_at_10": ndcg * 0.07,
+            "recall_at_1000": 0.9,
+        }
+        for system_id, ndcg in {
+            "e5": 0.5,
+            "e5_hyde": 0.6,
+            "e5_rerank": 0.55,
+            "e5_hyde_rerank": 0.7,
+            "e5_hyde_raw": 0.3,
+            "e5_rerank_raw": 0.4,
+        }.items()
     }
     result = build_comparison_result(
         config,
@@ -253,11 +393,19 @@ def test_write_comparison_artifacts_writes_json_csv_and_metadata(tmp_path):
     metadata = json.loads((tmp_path / "metadata.json").read_text(encoding="utf-8"))
     csv_text = (tmp_path / "comparison.csv").read_text(encoding="utf-8")
     assert set(paths) == {
-        "result", "comparison", "metadata", "run_result", "run_comparison", "run_metadata"
+        "result",
+        "comparison",
+        "metadata",
+        "run_dir",
+        "run_result",
+        "run_comparison",
+        "run_metadata",
+        "per_query_metrics",
     }
     assert Path(paths["run_result"]).is_file()
     assert Path(paths["run_comparison"]).is_file()
     assert Path(paths["run_metadata"]).is_file()
+    assert paths["per_query_metrics"] == ""
     assert persisted["system_ids"] == SYSTEM_IDS
     assert metadata["result"]["status"] == "blocked"
     assert "system_id,ndcg_at_10,delta_vs_e5" in csv_text
