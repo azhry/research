@@ -51,7 +51,7 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
 def test_paired_representations_reuse_the_same_generation_text():
     representations = build_hyde_representation_conditions(
         {"q1": "find a parser", "q2": "sort nested values"},
-        {"q1": ["parser implementation details"], "q2": ["nested sorting example"]},
+        {"q2": ["nested sorting example"], "q1": ["parser implementation details"]},
     )
 
     assert representations["query_plus_hypotheses"]["q1"] == (
@@ -60,6 +60,14 @@ def test_paired_representations_reuse_the_same_generation_text():
     assert representations["hypothesis_only"]["q1"] == "parser implementation details"
     assert list(representations["query_plus_hypotheses"]) == ["q1", "q2"]
     assert list(representations["hypothesis_only"]) == ["q1", "q2"]
+    try:
+        build_hyde_representation_conditions(
+            {"q1": "find a parser"}, {"other": ["parser implementation details"]}
+        )
+    except ValueError as error:
+        assert "must match the query IDs" in str(error)
+    else:
+        raise AssertionError("a generation for different query IDs was accepted")
 
 
 def test_paired_experiment_keeps_query_plus_as_the_existing_system_definition():

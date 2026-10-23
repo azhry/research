@@ -255,8 +255,8 @@ def build_hyde_representation_conditions(
 ) -> dict[str, dict[str, str]]:
     """Build paired query-plus and hypothesis-only text from one generation set."""
 
-    if list(queries) != list(generated):
-        raise ValueError("HyDE generations must match the query IDs and order")
+    if set(queries) != set(generated):
+        raise ValueError("HyDE generations must match the query IDs")
     query_plus = {
         query_id: combine_hypotheses(
             queries[query_id], generated[query_id], strategy="query_plus_hypotheses"
