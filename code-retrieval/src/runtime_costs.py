@@ -150,6 +150,9 @@ def observe_module_batches(
 
     def batch_size_from(args: Any, kwargs: Any) -> int:
         features = args[0] if args else kwargs
+        shape = getattr(features, "shape", None)
+        if shape is not None and len(shape) > 0:
+            return int(shape[0])
         if isinstance(features, Mapping):
             for value in features.values():
                 shape = getattr(value, "shape", None)

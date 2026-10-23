@@ -413,9 +413,8 @@ class CrossEncoderReranker:
                 convert_to_numpy=True,
             )
         else:
-            scoring_module = getattr(self.model, "model", self.model)
             with observe_module_batches(
-                scoring_module,
+                self.model,
                 device=self.device,
                 stage="cross_encoder_scoring",
                 observer=self.batch_observer,
@@ -2757,13 +2756,13 @@ def _persist_runtime_costs(
         "row_count": len(cost_rows),
     }
     if artifacts.get("run_result"):
-        _json_write(artifacts["run_result"], result)
+        _json_write(Path(artifacts["run_result"]), result)
     if artifacts.get("result"):
-        _json_write(artifacts["result"], result)
+        _json_write(Path(artifacts["result"]), result)
     if artifacts.get("run_metadata"):
-        _json_write(artifacts["run_metadata"], metadata)
+        _json_write(Path(artifacts["run_metadata"]), metadata)
     if artifacts.get("metadata"):
-        _json_write(artifacts["metadata"], metadata)
+        _json_write(Path(artifacts["metadata"]), metadata)
     artifacts["runtime_costs_json"] = str(cost_json_path)
     artifacts["runtime_costs_csv"] = str(cost_csv_path)
     return artifacts
