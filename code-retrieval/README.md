@@ -136,6 +136,19 @@ and `$env:E5_HYDE_RERANK_QRELS_SPLIT='valid'` or `'test'` before running the
 evaluation is retrospective and exploratory, not independent confirmation.
 Smoke runs remain wiring evidence only.
 
+Each comparison run records stage-level cache load, compute, and save times in
+`runs/<run_id>/runtime_costs.json` and writes normalized timing observations to
+`runtime_costs.csv`. The report includes model initialization, corpus encoding,
+Faiss index construction, query encoding, HyDE generation, search, reranking,
+latency percentiles and throughput, end-to-end query cost, and sampled process
+RSS. It records the device, precision, batch sizes, thread count, candidate
+depth, corpus/query sizes, timing and warm-up policy, and CUDA peak counters
+when a CUDA model device is used. The CSV uses one row per cache operation,
+pipeline phase, or observed model/retrieval batch. The first uncached run
+measures actual inference without a warm-up; a second run on the same identity
+shows cache-load cost separately. Smoke results remain wiring evidence, not
+benchmark evidence.
+
 The notebook's tagged query-level and secondary-metric analyses are optional
 and skipped by default. Set `E5_HYDE_RERANK_RUN_POSTHOC=1` when the separate
 AZH-519 analysis artifacts are available and those analyses are intended.

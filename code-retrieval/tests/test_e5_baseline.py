@@ -5,6 +5,7 @@ import numpy as np
 from e5_baseline import (
     BaselineConfig,
     CODE_VERSION,
+    build_faiss_index,
     expected_cache_metadata,
     evaluate_ndcg_at_10,
     load_valid_embedding_cache,
@@ -231,3 +232,32 @@ def test_faiss_ranking_uses_configured_candidate_depth_and_preserves_corpus_cont
     assert set(rankings) == {"q1", "q2"}
     assert all(set(row) == set(corpus_ids) for row in rankings.values())
     assert all(len(row) == len(corpus_ids) for row in rankings.values())
+
+
+def test_faiss_ranking_can_reuse_an_index_without_changing_order():
+    queries = np.asarray([[1.0, 0.0], [0.0, 1.0]], dtype=np.float32)
+    corpus = np.asarray([[1.0, 0.0], [0.9, 0.1], [0.0, 1.0]], dtype=np.float32)
+    query_ids = ["q1", "q2"]
+    corpus_ids = ["d1", "d2", "d3"]
+    expected = rank_with_faiss(
+        queries,
+        corpus,
+        query_ids,
+        corpus_ids,
+        top_k=3,
+    )
+    index = build_faiss_index(corpus)
+    observations = []
+    reused = rank_with_faiss(
+        queries,
+        corpus,
+        query_ids,
+        corpus_ids,
+        top_k=3,
+        index=index,
+        timing_observer=lambda **event: observations.append(event),
+    )
+
+    assert reused == expected
+    assert [event["stage"] for event in observations] == ["faiss_search"]
+    assert observations[0]["unit_count"] == len(query_ids)
