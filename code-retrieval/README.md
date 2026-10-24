@@ -13,9 +13,16 @@
 The existing four-system notebook is the reproduction baseline. The specification adds
 two representation diagnostics—query plus generated text without fusion, and
 the same generated text alone—plus independent E5 RRF sweeps for both transformed
-representations. It also specifies one code-trained reranker comparison on the
-same E5 candidate pool. The new code-trained model has not been run; it must pass
-a real weight-loading and finite-score preflight on CPU before a complete comparison.
+representations. Its opt-in AZH-531 path adds one code-trained reranker on the
+same E5 candidate IDs without changing the original four conditions. It pins
+NamanAgnih0tri/code-reranker-miniLM-staqc at revision
+9bcf5f1cceef4914e2fc564b2e4ee78410626702, uses real CPU CrossEncoder query/code
+pairs, and requires a real-weight finite-score preflight before complete runs.
+The path validates and reuses checksummed AZH-529 rankings, selects the code
+fusion weight on all 500 valid queries, and applies only that frozen weight to
+the 500 test queries. Keep its unique run outputs under
+`artifacts/azh531/`; preflight outputs are operational evidence and test outputs
+remain retrospective and exploratory.
 
 The R1 CosQA-only alternative is selected. R3's second-dataset request and
 Flan-T5-base quality concern remain unresolved and must be stated as limitations.
@@ -124,6 +131,27 @@ a new `RUNID` for its notebook-output directory:
 ```bash
 E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/SELECTIONID/selection_manifest.json E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_test.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/test-RUNID
 ```
+
+For AZH-531, enable `E5_HYDE_RERANK_CODE_RERANKER=1` and set
+`E5_HYDE_RERANK_RANKING_REPLAY=azh531`. Point
+`E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST` at the preserved complete
+AZH-529 valid manifest for both preflight and selection. Run the one-pair
+preflight first, then complete validation selection, then test evaluation with
+the new AZH-531 selection manifest:
+
+```bash
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_CODE_RERANKER=1 E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1 E5_HYDE_RERANK_RANKING_REPLAY=azh531 E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/AZH529_SELECTIONID/selection_manifest.json E5_HYDE_RERANK_CODE_BATCH_SIZE=128 E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh531 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh531/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output azh531_preflight.executed.ipynb --output-dir artifacts/azh531/notebooks/preflight-RUNID
+```
+
+After a passed preflight, remove `E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1` and
+use a new output directory for full validation selection. For the separate test
+execution, change the qrels split to `test`, set
+`E5_HYDE_RERANK_SELECTION_MANIFEST` to the exact AZH-531 selection manifest,
+set `E5_HYDE_RERANK_REPLAY_TEST_RESULT` to the preserved complete AZH-529 test
+result, and use another unique notebook-output directory. Keep batch size 128, eight
+CPU threads, CPU float32 inference, max length 512, and the complete 500-query
+split and 20,604-document corpus. These environment controls add only the code
+reranker condition; the original combined system remains unchanged.
 
 Test evaluation fails closed if the manifest digest, dataset/model controls,
 runtime, source or notebook hashes, validation baseline parity, or valid/test

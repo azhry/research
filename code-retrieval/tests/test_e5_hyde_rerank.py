@@ -4,6 +4,8 @@ from pathlib import Path
 from e5_baseline import CosQAData, RunData, load_valid_json_cache, save_json_cache
 from e5_hyde_rerank import (
     CODE_VERSION,
+    CODE_RERANKER_MODEL_ID,
+    CODE_RERANKER_MODEL_REVISION,
     ExperimentConfig,
     ModelRevisions,
     SYSTEM_IDS,
@@ -15,6 +17,7 @@ from e5_hyde_rerank import (
     combine_hypotheses,
     corpus_fingerprint,
     experiment_identity,
+    experiment_system_ids,
     load_ranking_replay,
     query_population_fingerprint,
     seal_selection_manifest,
@@ -33,7 +36,7 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
     assert config.candidate_depth == 1000
-    assert CODE_VERSION == "e5-hyde-rerank-v17-representation-ablations"
+    assert CODE_VERSION == "e5-hyde-rerank-v18-code-reranker"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
     assert config.hyde_combination_strategy == "query_plus_hypotheses"
@@ -46,6 +49,28 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     assert isinstance(config.as_dict()["hyde_fallback_prompts"], list)
     assert isinstance(config.as_dict()["hyde_fusion_weights"], list)
     assert isinstance(config.as_dict()["hypothesis_only_fusion_weights"], list)
+
+
+def test_code_reranker_is_opt_in_pinned_and_cpu_only():
+    default_config = ExperimentConfig()
+    code_config = ExperimentConfig(code_reranker_enabled=True)
+
+    assert experiment_system_ids(default_config) == SYSTEM_IDS
+    assert experiment_system_ids(code_config) == [*SYSTEM_IDS, "e5_code_rerank"]
+    assert code_config.code_reranker_model_id == CODE_RERANKER_MODEL_ID
+    assert code_config.code_reranker_model_revision == CODE_RERANKER_MODEL_REVISION
+    assert code_config.as_dict()["code_reranker_fusion_weights"] == [0.8, 0.2]
+    assert "code_reranker" not in ModelRevisions("e5", "hyde", "reranker").as_dict()
+    assert ModelRevisions("e5", "hyde", "reranker", CODE_RERANKER_MODEL_REVISION).as_dict()[
+        "code_reranker"
+    ] == CODE_RERANKER_MODEL_REVISION
+
+    try:
+        ExperimentConfig(code_reranker_enabled=True, code_reranker_device="cuda")
+    except ValueError as error:
+        assert "requires CPU inference" in str(error)
+    else:
+        raise AssertionError("the code reranker accepted non-CPU inference")
 
 
 def test_paired_representations_reuse_the_same_generation_text():
@@ -128,6 +153,26 @@ def test_reranker_reorders_without_changing_the_candidate_set():
     assert list(reranked["q1"]) == ["d2", "d1", "d3"]
     assert set(reranked["q1"]) == set(rankings["q1"])
     assert calls == [3]
+
+
+def test_code_reranker_candidate_order_is_stable_for_equal_scores():
+    rankings = {"q1": {"d2": 0.8, "d1": 0.7, "d3": 0.6}}
+    queries = {"q1": "find a parser"}
+    corpus = {
+        "d1": {"text": "first"},
+        "d2": {"text": "second"},
+        "d3": {"text": "third"},
+    }
+
+    reranked = rerank_candidate_rankings(
+        rankings,
+        queries,
+        corpus,
+        lambda pairs: [1.0] * len(pairs),
+    )
+
+    assert list(reranked["q1"]) == ["d2", "d1", "d3"]
+    assert set(reranked["q1"]) == set(rankings["q1"])
 
 
 def test_reciprocal_rank_fusion_is_weighted_and_depth_limited():
@@ -437,6 +482,56 @@ def test_comparison_result_contains_four_rows_and_deltas():
     assert result["representation_ablations"][-1]["ndcg_at_10"] == 0.58
     assert result["representation_ablations"][-1]["fusion_weights"] == "[0.65, 0.35]"
     assert result["representation_ablations"][-1]["selection_qrels_split"] == "not_selected"
+
+
+def test_code_reranker_comparison_adds_one_primary_row_and_raw_diagnostic():
+    config = ExperimentConfig(run_mode="smoke", code_reranker_enabled=True)
+    data = CosQAData(
+        corpus={"d1": {"text": "code"}},
+        queries={"q1": "query"},
+        qrels={"q1": {"d1": 1}},
+        schema={},
+    )
+    run_data = RunData(corpus=data.corpus, queries=data.queries, qrels=data.qrels)
+    score = {
+        "ndcg_at_10": 0.5,
+        "map_at_10": 0.5,
+        "recall_at_10": 0.5,
+        "precision_at_10": 0.05,
+        "recall_at_1000": 1.0,
+    }
+    metrics = {
+        system_id: dict(score)
+        for system_id in (
+            *SYSTEM_IDS,
+            "e5_hyde_raw",
+            "e5_hypothesis_only_raw",
+            "e5_rerank_raw",
+            "e5_code_rerank_raw",
+            "e5_hypothesis_only",
+            "e5_code_rerank",
+        )
+    }
+
+    result = build_comparison_result(
+        config,
+        data,
+        run_data,
+        metrics,
+        identity="code-reranker-report-schema",
+        revisions=ModelRevisions(
+            "e5", "hyde", "reranker", CODE_RERANKER_MODEL_REVISION
+        ),
+        environment={"device": "cpu"},
+        timings={},
+    )
+
+    assert result["system_ids"] == [*SYSTEM_IDS, "e5_code_rerank"]
+    assert [row["system_id"] for row in result["results"]] == result["system_ids"]
+    assert result["component_diagnostics"]["e5_code_rerank_raw"]["ndcg_at_10"] == 0.5
+    assert result["code_reranker"]["resolved_revision"] == CODE_RERANKER_MODEL_REVISION
+    assert result["fusion"]["component_weights"]["e5_code_rerank"] == [0.8, 0.2]
+    assert result["benchmark_evidence"] is False
 
 
 def test_representation_ablation_export_keeps_paired_metrics_and_headline_rows(tmp_path):
