@@ -55,7 +55,8 @@ Add only these focused conditions:
 | ID | Condition |
 | --- | --- |
 | `e5_hyde_raw` | Original query plus the same generated hypothesis, without rank fusion. Reuse the existing raw ranking if its provenance matches; otherwise preserve a new run in the existing notebook workflow. |
-| `e5_hypothesis_only` | E5 retrieval using only the same generated hypothesis (canonical HyDE), with no rank fusion. |
+| `e5_hypothesis_only_raw` | E5 retrieval using only the same generated hypothesis (canonical HyDE), with no rank fusion. |
+| `e5_hypothesis_only` | Weighted-RRF fusion of the original-query E5 ranking and the canonical hypothesis-only ranking, with its weight selected independently on valid qrels. |
 | `e5_code_rerank` | Replace the existing general reranker with the pinned code-trained pair scorer on the same E5 candidate IDs. Report its raw order and its validation-selected fusion with E5. |
 
 Do not add a stronger generator or a full generator-by-reranker factorial. Keep all new conditions in the existing notebook and reusable modules; do not create a parallel notebook or one-off script.

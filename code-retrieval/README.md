@@ -11,10 +11,11 @@
 ## Study scope
 
 The existing four-system notebook is the reproduction baseline. The specification adds
-two focused representation checks—query plus generated text without fusion, and
-generated text alone—and one code-trained reranker comparison on the same E5
-candidate pool. The new code-trained model has not been run; it must pass a real
-weight-loading and finite-score preflight on CPU before a complete comparison.
+two representation diagnostics—query plus generated text without fusion, and
+the same generated text alone—plus independent E5 RRF sweeps for both transformed
+representations. It also specifies one code-trained reranker comparison on the
+same E5 candidate pool. The new code-trained model has not been run; it must pass
+a real weight-loading and finite-score preflight on CPU before a complete comparison.
 
 The R1 CosQA-only alternative is selected. R3's second-dataset request and
 Flan-T5-base quality concern remain unresolved and must be stated as limitations.
@@ -98,27 +99,30 @@ directory's `result.json` and `metadata.json` show the latest run.
 four-system comparison: E5, E5 + HyDE, E5 + re-ranking, and E5 + HyDE +
 re-ranking. It uses the pinned CosQA corpus and query revision, depth-1,000
 E5 retrieval, RRF with `k=60`, the official COIR evaluator, and `nDCG@10` as
-the selection metric. HyDE keeps the original programming question with its
-generated hypothesis; the cross-encoder reorders the same E5 candidate pool.
-The combined system fuses the two selected component rankings.
+the selection metric. The original comparison keeps the programming question
+with its generated hypothesis; the paired ablation also embeds that same saved
+hypothesis alone. The cross-encoder reorders the same E5 candidate pool. The
+combined system fuses the two selected component rankings.
 
 Run validation selection and test evaluation as two separate notebook
 executions. From the `code-retrieval` directory, first use benchmark mode with
 the complete `valid` split. Replace `RUNID` with a unique output suffix:
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh527 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh527/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_selection.executed.ipynb --output-dir artifacts/azh527/notebooks/selection-RUNID
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_selection.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/selection-RUNID
 ```
 
 The selection run evaluates all 21 weights from 0.00 through 1.00, in 0.05
-steps, for E5 + HyDE, E5 + reranker, and the combined ranking. It chooses by
-`nDCG@10` rounded to five decimals and prefers the higher first-input weight on
-a tie. The notebook prints a unique immutable manifest path and digest. Copy
+steps, for E5 + query-plus-hypothesis, E5 + hypothesis-only, E5 + reranker, and
+the combined ranking. Both HyDE representations use the same saved generation
+for each query. Each sweep chooses by `nDCG@10` rounded to five decimals and
+prefers the higher first-input weight on a tie. The notebook prints a unique
+immutable manifest path and digest. Copy
 that exact path for the next execution with the complete `test` split, and use
 a new `RUNID` for its notebook-output directory:
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SELECTION_MANIFEST=artifacts/azh527/selection_runs/SELECTIONID/selection_manifest.json E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh527 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh527/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_test.executed.ipynb --output-dir artifacts/azh527/notebooks/test-RUNID
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/SELECTIONID/selection_manifest.json E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_test.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/test-RUNID
 ```
 
 Test evaluation fails closed if the manifest digest, dataset/model controls,
@@ -135,6 +139,16 @@ and `$env:E5_HYDE_RERANK_QRELS_SPLIT='valid'` or `'test'` before running the
 `python -m nbconvert` command. The test results were already examined, so this
 evaluation is retrospective and exploratory, not independent confirmation.
 Smoke runs remain wiring evidence only.
+
+The test comparison's `comparison.csv` retains its four headline systems. Each
+test comparison writes `representation_ablation.csv` with original E5, raw
+query-plus-hypothesis, raw hypothesis-only, and both validation-selected E5
+fusions. Validation selection writes the same ablation files beside its
+manifest. The run-scoped `representation_ablation_per_query.csv` stores paired
+primary and secondary metrics and deltas for the same queries. `result.json` records the shared
+generation hash, both representation hashes, and paths and hashes for raw and
+fused rankings. Historical AZH-527 replay cannot supply the hypothesis-only
+ranking, so representation selection requires a fresh complete valid run.
 
 Each comparison run records stage-level cache load, compute, and save times in
 `runs/<run_id>/runtime_costs.json` and writes normalized timing observations to

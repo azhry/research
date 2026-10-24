@@ -9,11 +9,13 @@ from e5_hyde_rerank import (
     SYSTEM_IDS,
     blocked_result,
     build_comparison_result,
+    build_hyde_representation_conditions,
     cache_metadata,
     candidate_contract,
     combine_hypotheses,
     corpus_fingerprint,
     experiment_identity,
+    load_ranking_replay,
     query_population_fingerprint,
     seal_selection_manifest,
     _select_rrf_weights,
@@ -23,6 +25,7 @@ from e5_hyde_rerank import (
     rerank_candidate_rankings,
     reciprocal_rank_fusion,
     write_comparison_artifacts,
+    _representation_ablation_per_query_rows,
 )
 
 
@@ -30,17 +33,64 @@ def test_config_keeps_shared_candidate_depth_and_explicit_hyde_controls():
     config = ExperimentConfig()
 
     assert config.candidate_depth == 1000
-    assert CODE_VERSION == "e5-hyde-rerank-v16-runtime-costs"
+    assert CODE_VERSION == "e5-hyde-rerank-v17-representation-ablations"
     assert config.hyde_model_id == "google/flan-t5-base"
     assert config.hyde_num_hypotheses == 1
     assert config.hyde_combination_strategy == "query_plus_hypotheses"
     assert config.reranker_model_id == "cross-encoder/ms-marco-MiniLM-L6-v2"
     assert config.rrf_k == 60
     assert config.hyde_fusion_weights == (0.65, 0.35)
+    assert config.hypothesis_only_fusion_weights == (0.65, 0.35)
     assert config.reranker_fusion_weights == (0.8, 0.2)
     assert config.combined_fusion_weights == (0.75, 0.25)
     assert isinstance(config.as_dict()["hyde_fallback_prompts"], list)
     assert isinstance(config.as_dict()["hyde_fusion_weights"], list)
+    assert isinstance(config.as_dict()["hypothesis_only_fusion_weights"], list)
+
+
+def test_paired_representations_reuse_the_same_generation_text():
+    representations = build_hyde_representation_conditions(
+        {"q1": "find a parser", "q2": "sort nested values"},
+        {"q2": ["nested sorting example"], "q1": ["parser implementation details"]},
+    )
+
+    assert representations["query_plus_hypotheses"]["q1"] == (
+        "find a parser\n\nparser implementation details"
+    )
+    assert representations["hypothesis_only"]["q1"] == "parser implementation details"
+    assert list(representations["query_plus_hypotheses"]) == ["q1", "q2"]
+    assert list(representations["hypothesis_only"]) == ["q1", "q2"]
+    try:
+        build_hyde_representation_conditions(
+            {"q1": "find a parser"}, {"other": ["parser implementation details"]}
+        )
+    except ValueError as error:
+        assert "must match the query IDs" in str(error)
+    else:
+        raise AssertionError("a generation for different query IDs was accepted")
+
+
+def test_paired_experiment_keeps_query_plus_as_the_existing_system_definition():
+    try:
+        ExperimentConfig(hyde_combination_strategy="hypothesis_only")
+    except ValueError as error:
+        assert "hypothesis_only is evaluated as a separate ablation" in str(error)
+    else:
+        raise AssertionError("the existing HyDE system accepted a hypothesis-only definition")
+
+
+def test_historical_valid_ranking_replay_fails_closed_without_hypothesis_only():
+    try:
+        load_ranking_replay(
+            {},
+            RunData(corpus={}, queries={}, qrels={}),
+            ExperimentConfig(run_mode="benchmark", qrels_split="valid"),
+            split="valid",
+        )
+    except ValueError as error:
+        assert "predates the hypothesis-only representation" in str(error)
+    else:
+        raise AssertionError("historical ranking replay entered validation selection")
 
 
 def test_combine_hypotheses_rejects_empty_generation_and_preserves_strategy():
@@ -203,12 +253,18 @@ def test_test_evaluation_rejects_manifest_with_mismatched_controls(tmp_path):
         json.dumps(
             seal_selection_manifest(
                 {
-                    "schema": "azh-527-validation-selection-v1",
+                    "schema": "code-retrieval-validation-selection-v2-representation-ablations",
                     "code_version": CODE_VERSION,
                     "status": "complete",
                     "selection_qrels_split": "valid",
                     "target_evaluation_qrels_split": "test",
                     "baseline_parity": {"passed": True},
+                    "sweeps": {
+                        "e5_hyde": {},
+                        "e5_hypothesis_only": {},
+                        "e5_rerank": {},
+                        "e5_hyde_rerank": {},
+                    },
                     "controls": {"runtime_controls": {"candidate_depth": 10}},
                 }
             ),
@@ -342,6 +398,8 @@ def test_comparison_result_contains_four_rows_and_deltas():
             "e5_rerank": 0.55,
             "e5_hyde_rerank": 0.7,
             "e5_hyde_raw": 0.3,
+            "e5_hypothesis_only_raw": 0.35,
+            "e5_hypothesis_only": 0.58,
             "e5_rerank_raw": 0.4,
         }.items()
     }
@@ -367,7 +425,90 @@ def test_comparison_result_contains_four_rows_and_deltas():
     assert result["artifact_provenance"]["synthetic_scores"] is False
     assert result["fusion"]["selection_qrels_split"] == "valid"
     assert result["component_diagnostics"]["e5_hyde_raw"]["ndcg_at_10"] == 0.3
+    assert result["component_diagnostics"]["e5_hypothesis_only_raw"]["ndcg_at_10"] == 0.35
     assert result["component_diagnostics"]["e5_rerank_raw"]["ndcg_at_10"] == 0.4
+    assert [row["system_id"] for row in result["representation_ablations"]] == [
+        "e5",
+        "e5_hyde_raw",
+        "e5_hypothesis_only_raw",
+        "e5_hyde",
+        "e5_hypothesis_only",
+    ]
+    assert result["representation_ablations"][-1]["ndcg_at_10"] == 0.58
+    assert result["representation_ablations"][-1]["fusion_weights"] == "[0.65, 0.35]"
+    assert result["representation_ablations"][-1]["selection_qrels_split"] == "not_selected"
+
+
+def test_representation_ablation_export_keeps_paired_metrics_and_headline_rows(tmp_path):
+    config = ExperimentConfig(run_mode="smoke", artifact_dir=str(tmp_path))
+    metric_values = {
+        "e5": 0.5,
+        "e5_hyde_raw": 0.3,
+        "e5_hypothesis_only_raw": 0.35,
+        "e5_hyde": 0.6,
+        "e5_hypothesis_only": 0.58,
+        "e5_rerank": 0.55,
+        "e5_hyde_rerank": 0.7,
+        "e5_rerank_raw": 0.4,
+    }
+    metrics = {}
+    for system_id, ndcg in metric_values.items():
+        per_query = {}
+        for query_id, offset in (("q1", 0.0), ("q2", 0.1)):
+            per_query[query_id] = {
+                "ndcg_at_10": ndcg + offset,
+                "map_at_10": ndcg + offset,
+                "recall_at_10": ndcg + offset,
+                "precision_at_10": (ndcg + offset) / 10,
+                "recall_at_1000": 1.0,
+                "first_relevant_rank": 1,
+                "relevant_document_count": 1,
+                "relevant_retrieved_at_10": 1,
+                "relevant_retrieved_at_1000": 1,
+            }
+        metrics[system_id] = {
+            "ndcg_at_10": ndcg,
+            "map_at_10": ndcg,
+            "recall_at_10": ndcg,
+            "precision_at_10": ndcg / 10,
+            "recall_at_1000": 1.0,
+            "per_query": per_query,
+        }
+    data = CosQAData(
+        corpus={"d1": {"text": "code"}},
+        queries={"q1": "query one", "q2": "query two"},
+        qrels={"q1": {"d1": 1}, "q2": {"d1": 1}},
+        schema={},
+    )
+    run_data = RunData(corpus=data.corpus, queries=data.queries, qrels=data.qrels)
+    result = build_comparison_result(
+        config,
+        data,
+        run_data,
+        metrics,
+        identity="paired-fixture",
+        revisions=ModelRevisions("e5", "hyde", "reranker"),
+        environment={"device": "cpu"},
+        timings={},
+    )
+    paired_rows = _representation_ablation_per_query_rows(
+        metrics, cache_identity="paired-fixture"
+    )
+    paths = write_comparison_artifacts(
+        config,
+        result,
+        representation_ablation_per_query=paired_rows,
+    )
+
+    headline = Path(paths["run_comparison"]).read_text(encoding="utf-8")
+    ablation = Path(paths["representation_ablation"]).read_text(encoding="utf-8")
+    paired = Path(paths["representation_ablation_per_query"]).read_text(encoding="utf-8")
+    metadata = json.loads(Path(paths["run_metadata"]).read_text(encoding="utf-8"))
+    assert headline.count("\n") == 5
+    assert "e5_hypothesis_only_raw" in ablation
+    assert "generated_text_only__ndcg_at_10" in paired
+    assert "generated_text_only__delta_ndcg_at_10_vs_e5" in paired
+    assert metadata["artifacts"]["representation_ablation_per_query"]["paired_query_count"] == 2
 
 
 def test_blocked_result_has_null_scores_and_explicit_blocker():
@@ -401,11 +542,16 @@ def test_write_comparison_artifacts_writes_json_csv_and_metadata(tmp_path):
         "run_comparison",
         "run_metadata",
         "per_query_metrics",
+        "representation_ablation",
+        "representation_ablation_latest",
+        "representation_ablation_per_query",
     }
     assert Path(paths["run_result"]).is_file()
     assert Path(paths["run_comparison"]).is_file()
     assert Path(paths["run_metadata"]).is_file()
     assert paths["per_query_metrics"] == ""
+    assert paths["representation_ablation"] == ""
+    assert paths["representation_ablation_per_query"] == ""
     assert persisted["system_ids"] == SYSTEM_IDS
     assert metadata["result"]["status"] == "blocked"
     assert "system_id,ndcg_at_10,delta_vs_e5" in csv_text
