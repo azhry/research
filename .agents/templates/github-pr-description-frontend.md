@@ -6,7 +6,7 @@ The PR must record observable browser evidence, not only component names or scre
 
 ## Linked work
 
-- Linear issue: [ISSUE-ID and URL]
+- Linear issue: [AZH-000 and URL]
 - Parent/source issue: [issue ID and URL, or "None"]
 - Design/reference: [URL, attachment, or "None"]
 - Depends on / unblocks: [issue or PR IDs, or "None"]
