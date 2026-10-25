@@ -301,3 +301,27 @@ Direct `nbconvert` does not create runner traces or per-query analysis exports.
 Preserve those separately when the analysis workflow requires them. The
 published CoIR E5-base/CosQA value of `0.3259` is an external paper reference,
 not a same-run baseline-parity artifact.
+
+## Post-hoc saved-run paired analysis
+
+AZH-533 analyzes the preserved complete test exports from the representation/fusion
+and code-reranker runs. It recomputes the four declared metrics for all ten system
+conditions, checks the shared systems and aggregate means, and reports paired
+query-bootstrap effects, judged-relevance failure counts, generator surface-form
+diagnostics, and stage-level CPU costs. It reads saved artifacts only; it does not
+load models or run retrieval. Test results remain retrospective and exploratory.
+
+From the code-retrieval directory, activate the pinned .venv and run:
+
+~~~bash
+python -m src.paired_analysis \
+  --representation-run-dir "artifacts/representation_fusion/runs/20261024T074213-1792827733813423800-c4a474ee2a9b77ff-metrics-v1" \
+  --code-reranker-run-dir "artifacts/azh531/runs/20261025T141136-1792937496699154000-128c5262f692082d-metrics-v1" \
+  --output-root "artifacts/azh533/analysis"
+~~~
+
+Both input run directories must already be present locally. Each invocation creates
+a new timestamped analysis directory with paired_effects.json, paired_effects.md,
+and per-query deltas; it never overwrites a prior analysis. The paired intervals use
+20,000 query resamples, seed 518, and 95% percentile bounds. They are unadjusted,
+descriptive intervals and are not simultaneous bounds.
