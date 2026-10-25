@@ -4117,11 +4117,37 @@ def _write_runtime_cost_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> No
     temporary.replace(path)
 
 
+def _runtime_costs_with_effective_fusion_weights(
+    result: Mapping[str, Any], costs: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Record the validation-selected weights actually used by this result."""
+
+    updated = dict(costs)
+    controls = dict(costs.get("measurement_controls", {}))
+    settings = dict(controls.get("experiment_settings", {}))
+    component_weights = result.get("fusion", {}).get("component_weights", {})
+    setting_by_system = {
+        "e5_hyde": "hyde_fusion_weights",
+        "e5_hypothesis_only": "hypothesis_only_fusion_weights",
+        "e5_rerank": "reranker_fusion_weights",
+        "e5_hyde_rerank": "combined_fusion_weights",
+        "e5_code_rerank": "code_reranker_fusion_weights",
+    }
+    for system_id, setting_name in setting_by_system.items():
+        if system_id in component_weights:
+            settings[setting_name] = list(component_weights[system_id])
+    if settings:
+        controls["experiment_settings"] = settings
+        updated["measurement_controls"] = controls
+    return updated
+
+
 def _persist_runtime_costs(
     result: dict[str, Any],
     artifacts: dict[str, str],
     costs: Mapping[str, Any],
 ) -> dict[str, str]:
+    effective_costs = _runtime_costs_with_effective_fusion_weights(result, costs)
     result_path = artifacts.get("run_result") or artifacts.get("result") or artifacts.get(
         "selection_result"
     )
@@ -4130,11 +4156,11 @@ def _persist_runtime_costs(
     run_dir.mkdir(parents=True, exist_ok=True)
     cost_json_path = run_dir / "runtime_costs.json"
     cost_csv_path = run_dir / "runtime_costs.csv"
-    _json_write(cost_json_path, dict(costs))
-    cost_rows = _runtime_cost_csv_rows(costs)
+    _json_write(cost_json_path, effective_costs)
+    cost_rows = _runtime_cost_csv_rows(effective_costs)
     _write_runtime_cost_csv(cost_csv_path, cost_rows)
 
-    result["runtime_costs"] = dict(costs)
+    result["runtime_costs"] = effective_costs
     result["cost_observations"] = {
         "local_model_inference": any(
             item["stage"]
@@ -4146,9 +4172,9 @@ def _persist_runtime_costs(
                 "hyde_generation",
                 "cross_encoder_scoring",
             }
-            for item in costs["batch_observations"]
+            for item in effective_costs["batch_observations"]
         ),
-        "gpu_memory_captured": costs["memory"]["gpu_peak_allocated_bytes"] is not None,
+        "gpu_memory_captured": effective_costs["memory"]["gpu_peak_allocated_bytes"] is not None,
         "latency_is_wall_clock_seconds": True,
         "runtime_costs_json": str(cost_json_path),
         "runtime_costs_csv": str(cost_csv_path),

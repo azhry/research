@@ -21,6 +21,7 @@ from e5_hyde_rerank import (
     load_ranking_replay,
     query_population_fingerprint,
     seal_selection_manifest,
+    _runtime_costs_with_effective_fusion_weights,
     _select_rrf_weights,
     validate_selection_manifest,
     validate_test_population_boundary,
@@ -532,6 +533,37 @@ def test_code_reranker_comparison_adds_one_primary_row_and_raw_diagnostic():
     assert result["code_reranker"]["resolved_revision"] == CODE_RERANKER_MODEL_REVISION
     assert result["fusion"]["component_weights"]["e5_code_rerank"] == [0.8, 0.2]
     assert result["benchmark_evidence"] is False
+
+
+def test_runtime_cost_settings_match_validation_selected_fusion_weights():
+    initial_settings = {
+        "hyde_fusion_weights": [0.65, 0.35],
+        "hypothesis_only_fusion_weights": [0.65, 0.35],
+        "reranker_fusion_weights": [0.8, 0.2],
+        "combined_fusion_weights": [0.75, 0.25],
+        "code_reranker_fusion_weights": [0.8, 0.2],
+    }
+    costs = {
+        "measurement_controls": {"experiment_settings": initial_settings},
+        "pipeline_wall_seconds": 1.0,
+    }
+    selected_weights = {
+        "e5_hyde": [0.65, 0.35],
+        "e5_hypothesis_only": [0.85, 0.15],
+        "e5_rerank": [0.8, 0.2],
+        "e5_hyde_rerank": [0.75, 0.25],
+        "e5_code_rerank": [0.7, 0.3],
+    }
+
+    updated = _runtime_costs_with_effective_fusion_weights(
+        {"fusion": {"component_weights": selected_weights}}, costs
+    )
+
+    settings = updated["measurement_controls"]["experiment_settings"]
+    assert settings["hypothesis_only_fusion_weights"] == [0.85, 0.15]
+    assert settings["code_reranker_fusion_weights"] == [0.7, 0.3]
+    assert costs["measurement_controls"]["experiment_settings"] == initial_settings
+    assert updated["pipeline_wall_seconds"] == 1.0
 
 
 def test_representation_ablation_export_keeps_paired_metrics_and_headline_rows(tmp_path):
