@@ -9,8 +9,8 @@ Choose exactly one outcome mode:
 
 ## Linked work
 
-- Test issue: [AZH-000 and URL]
-- Paired implementation issue: [AZH-000 and URL, or "None"]
+- Test issue: [ISSUE-ID and URL]
+- Paired implementation issue: [ISSUE-ID and URL, or "None"]
 - Parent/source issue: [issue ID and URL, or "None"]
 - Outcome mode: [Green verification | Red-test handoff]
 - Handoff commit/branch: [Required for red-test handoff; otherwise "Not applicable"]

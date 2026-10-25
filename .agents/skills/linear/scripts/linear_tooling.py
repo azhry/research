@@ -355,7 +355,7 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command")
 
     p_read = subparsers.add_parser("read-issue", help="Read a single Linear issue by ID")
-    p_read.add_argument("--id", required=True, help="Linear issue ID (e.g. AZH-417)")
+    p_read.add_argument("--id", required=True, help="Linear issue identifier")
     p_read.set_defaults(func=cmd_read_issue)
 
     p_search = subparsers.add_parser("search", help="Find work by text query")

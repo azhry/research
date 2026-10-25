@@ -1,4 +1,4 @@
-# AZH-525: Submitted experiment provenance and evaluation splits
+# Submitted experiment provenance and evaluation splits
 
 Audit date: 2026-10-13; reviewer verdict mapping added 2026-10-14
 Study: CoIR-Retrieval/CosQA with E5, HyDE, and cross-encoder reranking
@@ -27,13 +27,13 @@ Scope: retrospective inspection of the existing pinned data, selection artifacts
 
 ## Reviewer concern findings
 
-Scope: this issue audits R3's split/weight-selection and optimistic-bias concerns and R2's implementation-detail concern. These verdicts distinguish later local evidence from the conference upload, whose exact file remains unidentified.
+Scope: this audit covers R3's split/weight-selection and optimistic-bias concerns and R2's implementation-detail concern. These verdicts distinguish later local evidence from the conference upload, whose exact file remains unidentified.
 
 ### R3 — split reuse, weight selection, and strength of evidence
 
 | Concern | Verdict | Evidence and interpretation |
 | --- | --- | --- |
-| The 500 tuning queries were reused as the 500 test queries. | Contradicted by the saved later artifact chain; unresolved for the conference upload. | The pinned CoIR-Retrieval/cosqa revision has 500 `valid` and 500 `test` queries. Their IDs, normalized texts, positive judgments, and relevant documents have zero overlap. The selection manifest uses `valid`; the saved final run uses `test`; the ranking and validation-summary hashes match. The revision-28 anonymous manuscript states this separation. The revision-00 PDF is explicitly an AZH-518 review input, not proof of the conference upload. |
+| The 500 tuning queries were reused as the 500 test queries. | Contradicted by the saved later artifact chain; unresolved for the conference upload. | The pinned CoIR-Retrieval/cosqa revision has 500 `valid` and 500 `test` queries. Their IDs, normalized texts, positive judgments, and relevant documents have zero overlap. The selection manifest uses `valid`; the saved final run uses `test`; the ranking and validation-summary hashes match. The revision-28 anonymous manuscript states this separation. The revision-00 PDF is explicitly a review input, not proof of the conference upload. |
 | Weights were selected using all 500 validation queries. | Confirmed. | The frozen manifest selects on all 500 `valid` queries, maximizing nDCG@10 over 21 RRF weights from 0.00 to 1.00 by 0.05, with k=60. Therefore validation scores are tuned selection results and must not be presented as held-out performance. This is distinct from reusing test queries. |
 | Test judgments influenced the saved weight selection. | Not supported by the saved later artifact chain; unresolved for the conference upload. | The manifest records `valid`, its input hashes match, and the final saved evaluation uses the disjoint `test` split with those frozen weights. No local artifact inspected shows test qrels entering selection. |
 | The gains are small and do not establish every component's benefit. | Partly confirmed, with a clearer split-specific result. | On the saved 500-query test run, nDCG@10 changes versus E5 are: HyDE +0.01416 (95% paired-bootstrap CI [0.00313, 0.02523]); reranking +0.00209 ([-0.00949, 0.01348]); combined +0.01945 ([0.00894, 0.03017]). The reranking-only interval includes zero. Combined versus HyDE is +0.00529 ([-0.00024, 0.01137]), also including zero, so the best combined point score does not show an incremental gain over HyDE. Intervals use 20,000 paired query bootstrap replicates, seed 518, and are unadjusted across comparisons. |
@@ -50,7 +50,7 @@ The local evidence therefore supports positive nDCG@10 differences for HyDE and 
 
 ### Submission identity boundary
 
-`paper/README.md` identifies revision 28's anonymous PDF as the intended EDAS upload source, but the named `submission-anonymous.pdf` is absent. The root review PDF is byte-identical to revision 28's anonymous PDF; that proves the local copy relationship, not that EDAS received it. Revision 00 is labeled as material supplied to the AZH-518 review thread, not as a submission receipt. No EDAS receipt or exact uploaded file was found. Accordingly, R3's original-submission leakage allegation and R2's original-submission presentation assessment remain unverified even where later local revisions address them.
+`paper/README.md` identifies revision 28's anonymous PDF as the intended EDAS upload source, but the named `submission-anonymous.pdf` is absent. The root review PDF is byte-identical to revision 28's anonymous PDF; that proves the local copy relationship, not that EDAS received it. Revision 00 is labeled as material supplied to the review thread, not as a submission receipt. No EDAS receipt or exact uploaded file was found. Accordingly, R3's original-submission leakage allegation and R2's original-submission presentation assessment remain unverified even where later local revisions address them.
 
 ## Dataset and split audit
 
@@ -108,7 +108,7 @@ See the [CoIR dense exact-search source](https://github.com/CoIR-team/coir/blob/
 - Revision-28 anonymous review PDF and the root review PDF are byte-identical; both SHA-256 values are 0a0641f7a282f7aa73a7c05c2603d7121a73289a183225f6135fe5a807532ff9.
 - code-retrieval/paper/main.pdf is author-identified and differs from the anonymous candidate.
 - code-retrieval/paper/submission-anonymous.pdf is absent, although the README describes it as the intended EDAS upload copy.
-- No EDAS receipt or exact upload was found among available paper/artifact files or AZH-525 attachments. The issue attachments are diagrams, not a manuscript.
+- No EDAS receipt or exact upload was found among available paper/artifact files or audit attachments. The issue attachments are diagrams, not a manuscript.
 - Historical revision notes describe anonymous PDFs as intended upload copies. They establish intent, not upload identity.
 
 Verdict: revision 28 is the best local anonymous candidate, but the actual submission is unverified.

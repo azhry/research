@@ -4,7 +4,7 @@ Apply this workflow to Linear, GitHub, issue, pull-request, and release work.
 
 ## Linear
 
-- Treat an issue identifier (for example, `AZH-385`) as a Linear task. Use the connected Linear app to read it; if the tool is not immediately visible, discover available tools before selecting any fallback.
+- Treat an issue identifier as a Linear task. Use the connected Linear app to read it; if the tool is not immediately visible, discover available tools before selecting any fallback.
 - Do not use direct HTTP, `curl`, guessed GraphQL queries, or credentials from project configuration for Linear while the connected app is available. If the connector is genuinely unavailable after discovery, immediately use the documented API fallback with the official schema or documentation; load only the required credential without output, and report authorization failures rather than bypassing them.
 - Read the named issue before changing it; verify its team, project, state, relations, and constraints.
 - Read its comments and the team's valid statuses before mutation. Read related issues and project context when they affect scope or sequencing.

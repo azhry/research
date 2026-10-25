@@ -30,7 +30,7 @@ When the Linear MCP connector is not available, use the scripts in `.agents/skil
 
 ```powershell
 $env:LINEAR_API_KEY = "<your-api-key>"
-py .agents/skills/linear/scripts/linear_tooling.py read-issue --id AZH-417
+py .agents/skills/linear/scripts/linear_tooling.py read-issue --id ISSUE-ID
 ```
 
 ## Delivery handoff

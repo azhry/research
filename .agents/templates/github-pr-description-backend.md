@@ -6,7 +6,7 @@ The PR description is the review and handoff record. Do not claim a check passed
 
 ## Linked work
 
-- Linear issue: [AZH-000 and URL]
+- Linear issue: [ISSUE-ID and URL]
 - Parent/source issue: [issue ID and URL, or "None"]
 - Depends on: [issue/PR and delivered artifact, or "None"]
 - Unblocks: [issue IDs, or "None"]
