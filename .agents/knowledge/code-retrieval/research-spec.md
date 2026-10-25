@@ -1,6 +1,6 @@
 # Code Retrieval research specification
 
-**Status:** Scope selected on 2026-10-14. This document defines the protocol and evidence boundary; consult AZH-531's run-specific manifests for execution state. A model preflight is operational evidence, not a benchmark, and smoke, partial, complete-selection, and retrospective-test artifacts retain distinct classifications.
+**Status:** Scope selected on 2026-10-14. This document defines the protocol and evidence boundary; consult code-reranker run manifests for execution state. A model preflight is operational evidence, not a benchmark, and smoke, partial, complete-selection, and retrospective-test artifacts retain distinct classifications.
 
 This file defines the study scope and its exact execution procedure; use it as the canonical specification.
 

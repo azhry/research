@@ -762,7 +762,7 @@ def run_code_reranker_preflight(
     document_id = next(iter(candidate_ids))
     if query_id not in run_data.queries or document_id not in run_data.corpus:
         raise ValueError("code-reranker preflight pair is outside the declared population")
-    run_id = f"azh531-preflight-{time.time_ns()}"
+    run_id = f"code-reranker-preflight-{time.time_ns()}"
     environment = environment_metadata(config)
     with RuntimeCostRecorder() as cost_recorder:
         with cost_recorder.phase("model_load_code_reranker", "startup"):
@@ -1493,7 +1493,7 @@ def load_validation_ranking_replay(
         or manifest.get("target_evaluation_qrels_split") != "test"
         or manifest.get("baseline_parity", {}).get("passed") is not True
     ):
-        raise ValueError("valid ranking replay requires a complete sealed AZH-529 selection")
+        raise ValueError("valid ranking replay requires a complete sealed selection manifest")
     if len(run_data.queries) != 500 or len(run_data.qrels) != 500 or len(run_data.corpus) != 20604:
         raise ValueError("valid ranking replay requires the complete declared CosQA population")
     population = manifest.get("selection_population", {})
@@ -1956,7 +1956,7 @@ def run_validation_selection(
     if "hyde_hypothesis_only" not in rankings:
         raise ValueError(
             "validation selection requires a fresh hypothesis-only ranking; "
-            "historical AZH-527 ranking replay does not contain this representation"
+            "historical ranking replay does not contain this representation"
         )
     if len(run_data.queries) != 500 or len(run_data.qrels) != 500 or len(run_data.corpus) != 20604:
         raise ValueError("validation selection requires the complete declared CosQA population")
@@ -2383,7 +2383,7 @@ def run_replayed_test_evaluation(
     if "hyde_hypothesis_only" not in rankings:
         raise ValueError(
             "test ranking replay requires a hypothesis-only HyDE ranking; "
-            "historical AZH-527 artifacts cannot satisfy the representation ablation"
+            "historical rankings cannot satisfy the representation ablation"
         )
     config = replace(
         config,
