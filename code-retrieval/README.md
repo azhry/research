@@ -133,14 +133,14 @@ E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SEL
 ```
 
 For AZH-531, enable `E5_HYDE_RERANK_CODE_RERANKER=1` and set
-`E5_HYDE_RERANK_RANKING_REPLAY=azh531`. Point
+`E5_HYDE_RERANK_RANKING_REPLAY=code_reranker`. Point
 `E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST` at the preserved complete
 AZH-529 valid manifest for both preflight and selection. Run the one-pair
 preflight first, then complete validation selection, then test evaluation with
 the new AZH-531 selection manifest:
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_CODE_RERANKER=1 E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1 E5_HYDE_RERANK_RANKING_REPLAY=azh531 E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/AZH529_SELECTIONID/selection_manifest.json E5_HYDE_RERANK_CODE_BATCH_SIZE=128 E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh531 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh531/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output azh531_preflight.executed.ipynb --output-dir artifacts/azh531/notebooks/preflight-RUNID
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_CODE_RERANKER=1 E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1 E5_HYDE_RERANK_RANKING_REPLAY=code_reranker E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/AZH529_SELECTIONID/selection_manifest.json E5_HYDE_RERANK_CODE_BATCH_SIZE=128 E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/azh531 E5_HYDE_RERANK_CACHE_DIR=artifacts/azh531/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output azh531_preflight.executed.ipynb --output-dir artifacts/azh531/notebooks/preflight-RUNID
 ```
 
 After a passed preflight, remove `E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1` and

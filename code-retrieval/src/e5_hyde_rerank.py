@@ -3401,7 +3401,7 @@ def _run_experiment(
         test_boundary = validate_test_population_boundary(selection_manifest, run_data)
     if config.code_reranker_enabled and ranking_replay is None:
         raise ValueError(
-            "the AZH-531 code reranker requires provenance-validated saved E5 candidate rankings"
+            "the code reranker requires provenance-validated saved E5 candidate rankings"
         )
     if ranking_replay is not None:
         if config.run_mode != "benchmark":
