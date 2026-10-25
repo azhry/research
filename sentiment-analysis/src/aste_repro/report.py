@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import ast
+import hashlib
 import json
+import math
+import re
 import statistics
 from collections import defaultdict
 from pathlib import Path
@@ -13,6 +17,369 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[2]
 MATRIX_PATH = ROOT / "configs" / "experiment-matrix.json"
 DEFAULT_RUNS = ROOT / "runs"
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _parsed_hoasa_rows(path: Path) -> list[tuple[str, Any]]:
+    rows = []
+    with path.open("r", encoding="utf-8-sig") as stream:
+        for line_number, raw in enumerate(stream, 1):
+            line = raw.rstrip("\r\n")
+            if line.count("####") != 1:
+                raise ValueError(f"{path}:{line_number}: invalid HoASA delimiter")
+            sentence, annotations = line.split("####", maxsplit=1)
+            parsed = ast.literal_eval(annotations.strip())
+            rows.append((sentence.strip(), parsed))
+    return rows
+
+
+def _verify_log_step_resolution(
+    run_dir: Path, actual: dict[str, Any], expected: int,
+) -> None:
+    """Validate PyABSA's logged runtime normalization of the -1 sentinel."""
+    resolved = actual.get("log_step")
+    evidence = actual.get("log_step_resolution")
+    if expected != -1 or not isinstance(resolved, int) or isinstance(resolved, bool) or resolved <= 0:
+        raise ValueError(f"invalid resolved log_step sentinel value in {run_dir}")
+    if not isinstance(evidence, dict):
+        raise ValueError(f"runtime log_step normalization evidence missing in {run_dir}")
+    if evidence.get("requested") != -1 or evidence.get("resolved") != resolved:
+        raise ValueError(f"runtime log_step normalization record disagrees with config in {run_dir}")
+    if evidence.get("evidence_verified") is not True:
+        raise ValueError(f"runtime log_step normalization was not source/log verified in {run_dir}")
+    if evidence.get("resolution_rule") != (
+        "PyABSA 2.4.3 replaces negative log_step with len(train_dataloaders[0])"
+    ):
+        raise ValueError(f"unexpected runtime log_step normalization rule in {run_dir}")
+
+    runtime_copy = run_dir / evidence.get("runtime_source_snapshot", "")
+    if not runtime_copy.is_file() or _sha256(runtime_copy) != evidence.get("runtime_source_sha256"):
+        raise ValueError(f"PyABSA runtime source snapshot checksum mismatch in {run_dir}")
+    source_text = runtime_copy.read_text(encoding="utf-8")
+    if not re.search(
+        r"if\s+self\.config\.log_step\s*<\s*0\s*:\s*"
+        r"self\.config\.log_step\s*=\s*\(\s*"
+        r"len\(self\.train_dataloaders\[0\]\)",
+        source_text,
+        re.DOTALL,
+    ):
+        raise ValueError(f"saved PyABSA runtime source does not contain the normalization rule in {run_dir}")
+    installed_source = Path(evidence.get("runtime_source_path", ""))
+    if installed_source.is_file() and _sha256(installed_source) != evidence.get("runtime_source_sha256"):
+        raise ValueError(f"installed PyABSA runtime source changed since the run in {run_dir}")
+
+    log_path = run_dir / evidence.get("training_log_path", "training.log")
+    if not log_path.is_file():
+        raise ValueError(f"training log missing for runtime log_step evidence in {run_dir}")
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    log_steps = [int(value) for value in re.findall(r"\blog_step:(-?\d+)\s+-->\s+Calling Count", log_text)]
+    seeds = [int(value) for value in re.findall(r"\bseed:(\d+)\s+-->\s+Calling Count", log_text)]
+    num_steps = [int(value) for value in re.findall(r"\bNum steps\s*=\s*(\d+)", log_text)]
+    epochs = int(evidence.get("num_epoch", 0))
+    if evidence.get("logged_log_step_values") != log_steps or log_steps != [-1, resolved, resolved]:
+        raise ValueError(f"training log does not substantiate resolved log_step in {run_dir}")
+    if evidence.get("logged_seed_order") != seeds or seeds != [1, 2, 3]:
+        raise ValueError(f"training log does not show the three declared seed starts in {run_dir}")
+    if evidence.get("logged_num_steps") != num_steps or num_steps != [resolved * epochs] * 3:
+        raise ValueError(f"training log step counts disagree with resolved log_step in {run_dir}")
+
+
+def _verify_seed_cache_compatibility(
+    run_dir: Path, reference: dict[str, Any], expected_seeds: list[int]
+) -> None:
+    evidence = reference.get("runtime_seed_cache_compatibility")
+    if evidence is None:
+        return  # historical runs predate the cache-seed compatibility hook
+    if evidence.get("method") != "BaseTrainingInstructor.load_cache_dataset":
+        raise ValueError(f"unexpected runtime seed-cache compatibility method in {run_dir}")
+    runtime_copy = run_dir / evidence.get("runtime_source_snapshot", "")
+    if (
+        not runtime_copy.is_file()
+        or _sha256(runtime_copy) != evidence.get("runtime_source_sha256")
+    ):
+        raise ValueError(f"PyABSA dataset-cache source snapshot checksum mismatch in {run_dir}")
+    runtime_source = Path(evidence.get("runtime_source_path", ""))
+    if runtime_source.is_file() and _sha256(runtime_source) != evidence.get("runtime_source_sha256"):
+        raise ValueError(f"installed PyABSA dataset-cache source changed since the run in {run_dir}")
+    source_text = runtime_copy.read_text(encoding="utf-8")
+    if '"seed"' not in source_text or not re.search(
+        r"self\.config,\s*\)\s*=\s*pickle\.load\(f_cache\)", source_text
+    ):
+        raise ValueError(
+            f"saved PyABSA runtime does not contain the recorded cache-config behavior in {run_dir}"
+        )
+    corrections = evidence.get("seed_restore_events")
+    if not isinstance(corrections, list):
+        raise ValueError(f"runtime seed-cache corrections are not recorded as a list in {run_dir}")
+    for correction in corrections:
+        requested = correction.get("requested_seed")
+        cached = correction.get("cached_config_seed")
+        restored = correction.get("restored_seed")
+        if requested not in expected_seeds or cached == requested or restored != requested:
+            raise ValueError(f"runtime seed-cache correction is inconsistent in {run_dir}")
+
+
+def _verify_reference_artifacts(run: dict[str, Any], protocol: dict[str, Any]) -> list[dict[str, Any]]:
+    """Verify a completed source-script run before allowing it into the reference table."""
+    manifest = run["manifest"]
+    run_dir = run["path"].parent
+    encoder = manifest.get("encoder")
+    source_spec = protocol.get("source_scripts", {}).get(encoder)
+    if not source_spec:
+        raise ValueError(f"reference run {manifest.get('run_id')} has an unknown encoder")
+    expected_seeds = [int(seed) for seed in protocol["seeds"]]
+    reference = manifest.get("reference", {})
+    expected_dataset_dir = (run_dir / "datasets" / "aste").resolve()
+    if Path(reference.get("dataset_directory", "")).resolve() != expected_dataset_dir:
+        raise ValueError(f"source script dataset directory does not point to the verified run copy in {run_dir}")
+    if Path((manifest.get("environment") or {}).get("working_directory", "")).resolve() != run_dir.resolve():
+        raise ValueError(f"source script working directory differs from its immutable run directory in {run_dir}")
+    if manifest.get("experiment_protocol_id") != protocol.get("id"):
+        raise ValueError(f"reference protocol ID mismatch in {run_dir}")
+    if manifest.get("purpose") != "reference_baseline_reproduction":
+        raise ValueError(f"reference purpose mismatch in {run_dir}")
+    if manifest.get("status") != "complete":
+        return []
+
+    source_copy = run_dir / reference.get("source_script_copy", "")
+    if not source_copy.is_file():
+        raise ValueError(f"completed reference run lacks its source-script copy: {run_dir}")
+    source_hash = _sha256(source_copy)
+    if source_hash != source_spec.get("sha256") or reference.get("script_sha256") != source_hash:
+        raise ValueError(f"source-script checksum mismatch in {run_dir}")
+    if reference.get("source_script_sha256") != source_hash:
+        raise ValueError(f"source-script copy checksum mismatch in {run_dir}")
+    if reference.get("script") != source_spec.get("path"):
+        raise ValueError(f"source-script path mismatch in {run_dir}")
+    external_script = Path(reference.get("script_path", ""))
+    if external_script.is_file() and _sha256(external_script) != source_hash:
+        raise ValueError(f"local PyABSA source script changed since the run in {run_dir}")
+
+    model = manifest.get("model", {})
+    if model.get("repository") != source_spec.get("model_id"):
+        raise ValueError(f"model repository mismatch in {run_dir}")
+    if model.get("revision") != source_spec.get("model_revision"):
+        raise ValueError(f"model revision mismatch in {run_dir}")
+    cache = reference.get("model_cache") or {}
+    if cache.get("revision_directory") != source_spec.get("model_revision"):
+        raise ValueError(f"resolved model cache revision mismatch in {run_dir}")
+    if not cache.get("small_file_sha256"):
+        raise ValueError(f"model config/tokenizer hashes missing in {run_dir}")
+    cached_snapshot = Path(cache.get("snapshot_path", ""))
+    if cached_snapshot.is_dir():
+        for relative, expected_hash in cache["small_file_sha256"].items():
+            cached_file = cached_snapshot / relative
+            if not cached_file.is_file() or _sha256(cached_file) != expected_hash:
+                raise ValueError(f"model cache checksum mismatch for {relative} in {run_dir}")
+    packages = (manifest.get("environment") or {}).get("packages", {})
+    if packages.get("pyabsa") != "2.4.3":
+        raise ValueError(f"reference runtime is not PyABSA 2.4.3 in {run_dir}")
+    code_hashes = manifest.get("code", {}).get("file_sha256", {})
+    if not code_hashes:
+        raise ValueError(f"workspace source/config provenance missing in {run_dir}")
+    snapshot_dir = run_dir / manifest.get("code", {}).get("snapshot_directory", "provenance/workspace-source")
+    for relative, expected_hash in code_hashes.items():
+        snapshot_file = snapshot_dir / relative
+        current_file = ROOT / relative
+        if snapshot_file.is_file():
+            if _sha256(snapshot_file) != expected_hash:
+                raise ValueError(f"workspace source snapshot checksum mismatch for {relative} in {run_dir}")
+        elif current_file.is_file() and _sha256(current_file) != expected_hash:
+            raise ValueError(f"workspace code checksum changed for {relative} in {run_dir}")
+        elif not current_file.is_file():
+            raise ValueError(f"workspace code provenance is unavailable for {relative} in {run_dir}")
+
+    source_files = manifest.get("source_files", {})
+    if set(source_files) != {"train", "dev", "test"}:
+        raise ValueError(f"source data provenance incomplete in {run_dir}")
+    for split, data in source_files.items():
+        run_copy = run_dir / data.get("run_copy_path", "")
+        if not run_copy.is_file() or _sha256(run_copy) != data.get("run_copy_sha256"):
+            raise ValueError(f"{split} source data checksum mismatch in {run_dir}")
+        if data.get("reference_sha256") != data.get("run_copy_sha256"):
+            raise ValueError(f"{split} source-script data copy differs in {run_dir}")
+        if data.get("parsed_lines_equal") is not True:
+            raise ValueError(f"{split} source data is not semantically equal in {run_dir}")
+        canonical_path = Path(data.get("canonical_path", ""))
+        if canonical_path.is_file() and _sha256(canonical_path) != data.get("canonical_sha256"):
+            raise ValueError(f"{split} canonical HoASA source changed since the run in {run_dir}")
+        if canonical_path.is_file() and _parsed_hoasa_rows(canonical_path) != _parsed_hoasa_rows(run_copy):
+            raise ValueError(f"{split} source-script rows differ semantically from canonical HoASA in {run_dir}")
+
+    requested = manifest.get("requested_config", {})
+    actual = (manifest.get("resolved_config") or {}).get("actual_settings", {})
+    for name, expected_value in source_spec.get("settings", {}).items():
+        if requested.get(name) != expected_value:
+            raise ValueError(f"requested source setting {name} differs in {run_dir}")
+        observed = actual.get(name)
+        if isinstance(expected_value, (float, int)) and not isinstance(expected_value, bool):
+            if name == "log_step" and expected_value == -1 and isinstance(observed, int) and observed > 0:
+                _verify_log_step_resolution(run_dir, actual, int(expected_value))
+                continue
+            if observed is None or not math.isclose(
+                float(observed), float(expected_value), rel_tol=0, abs_tol=1e-12
+            ):
+                raise ValueError(f"resolved source setting {name} differs in {run_dir}")
+        elif observed != expected_value:
+            raise ValueError(f"resolved source setting {name} differs in {run_dir}")
+    if manifest.get("seeds") != expected_seeds or actual.get("seed") != expected_seeds:
+        raise ValueError(f"declared source seeds differ in {run_dir}")
+    _verify_seed_cache_compatibility(run_dir, reference, expected_seeds)
+
+    metric_path = run_dir / "reference_metrics.json"
+    if not metric_path.is_file():
+        raise ValueError(f"completed reference run lacks reference_metrics.json: {run_dir}")
+    metric_doc = json.loads(metric_path.read_text(encoding="utf-8"))
+    seed_metrics = manifest.get("seed_metrics", [])
+    if metric_doc.get("seeds") != seed_metrics:
+        raise ValueError(f"metric file and manifest seed outcomes disagree in {run_dir}")
+    if [int(item.get("seed", -1)) for item in seed_metrics] != expected_seeds:
+        raise ValueError(f"source run does not contain exactly the declared three seeds in {run_dir}")
+    for item in seed_metrics:
+        score = float(item["max_test_f1_pct"])
+        if not math.isfinite(score) or not 0 <= score <= 100:
+            raise ValueError(f"invalid Max-Test-F1 value in {run_dir}")
+
+    expected_hashes = manifest.get("artifact_sha256", {})
+    actual_files = {
+        path.relative_to(run_dir).as_posix(): path
+        for path in run_dir.rglob("*")
+        if path.is_file() and path != run["path"]
+    }
+    if set(expected_hashes) != set(actual_files):
+        raise ValueError(f"artifact manifest is incomplete or stale in {run_dir}")
+    for relative, path in actual_files.items():
+        if _sha256(path) != expected_hashes[relative]:
+            raise ValueError(f"artifact checksum mismatch for {relative} in {run_dir}")
+    correction = manifest.get("validation_correction")
+    if correction is not None:
+        backup = run_dir / correction.get("original_manifest_backup", "")
+        if not backup.is_file() or _sha256(backup) != correction.get("original_manifest_sha256"):
+            raise ValueError(f"prior failed manifest was not preserved by validation correction in {run_dir}")
+        old_manifest = json.loads(backup.read_text(encoding="utf-8"))
+        if old_manifest.get("status") != "failed" or old_manifest.get("failure") != correction.get("original_failure"):
+            raise ValueError(f"validation correction audit trail disagrees with preserved manifest in {run_dir}")
+    return seed_metrics
+
+
+def _reference_baseline_section(
+    all_runs: list[dict[str, Any]], protocol: dict[str, Any], *, heading: str, context: str
+) -> list[str]:
+    if not protocol:
+        return []
+    runs = [
+        run for run in all_runs
+        if run["manifest"].get("experiment_protocol_id") == protocol.get("id")
+        and run["manifest"].get("purpose") == "reference_baseline_reproduction"
+    ]
+    by_encoder: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for run in runs:
+        encoder = run["manifest"].get("encoder")
+        if encoder not in protocol.get("source_scripts", {}):
+            raise ValueError(f"unknown encoder in reference baseline manifest: {run['path']}")
+        by_encoder[encoder].append(run)
+
+    lines = [
+        "",
+        f"## {heading}",
+        "",
+        context,
+        "This reproduction runs the four unchanged local PyABSA source scripts, one per encoder, with each script's declared seeds `1, 2, 3`. It reports `MetricVisualizer Max-Test-F1`, which selects the best checkpoint using test-set scores during training. These measurements are test-leaked reference diagnostics and are not clean held-out estimates; they are never pooled with the validation-selected v3 results above.",
+        "",
+        "Every complete row below is recomputed from the three per-seed metrics in its source-run manifest. The source script, resolved configuration, cached model revision, train/dev/test data copies, and every saved run artifact checksum are validated before the row is emitted. Workspace source/config files are snapshotted under each run's `provenance/workspace-source/` so later code edits do not invalidate historical provenance.",
+        "PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. The runner records the installed instructor source checksum, snapshots that source, and verifies the three seed logs (`-1` on initialization, then the resolved value) and `Num steps` before accepting this normalization. Any earlier validation rejection corrected under this rule retains the byte-for-byte original failed manifest and a checksum-linked correction record; source scripts and training settings remain unchanged.",
+        "",
+        "| Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |",
+    ]
+    for encoder in protocol["source_scripts"]:
+        attempts = sorted(
+            by_encoder.get(encoder, []),
+            key=lambda run: (run["manifest"].get("created_at", ""), run["manifest"].get("run_id", "")),
+        )
+        complete = [run for run in attempts if run["manifest"].get("status") == "complete"]
+        if len(complete) > 1:
+            raise ValueError(f"multiple complete source-script runs exist for {encoder}; refusing to pool them")
+        verified_metrics = _verify_reference_artifacts(complete[0], protocol) if complete else []
+        metrics_by_seed = {int(item["seed"]): float(item["max_test_f1_pct"]) for item in verified_metrics}
+        expected_seeds = [int(seed) for seed in protocol["seeds"]]
+        if verified_metrics and set(metrics_by_seed) != set(expected_seeds):
+            raise ValueError(f"complete reference source-script run for {encoder} has an incomplete seed set")
+        mean = statistics.mean(metrics_by_seed.values()) if metrics_by_seed else None
+        target = protocol["reported_targets"][encoder]
+        delta = mean - float(target["mean_f1_pct"]) if mean is not None else None
+        status_counts = {
+            status: sum(run["manifest"].get("status") == status for run in attempts)
+            for status in ("running", "failed", "interrupted", "blocked")
+        }
+        if metrics_by_seed:
+            state = "complete; test-leaked"
+        elif status_counts["running"]:
+            state = "running"
+        elif attempts and attempts[-1]["manifest"].get("status") in {
+            "failed", "interrupted", "blocked"
+        }:
+            state = attempts[-1]["manifest"]["status"]
+        else:
+            state = "not run"
+        score_text = ", ".join(
+            f"{seed}:{metrics_by_seed[seed]:.2f}" if seed in metrics_by_seed else f"{seed}:—"
+            for seed in expected_seeds
+        )
+        outcome_text = f"{len(metrics_by_seed)}/3"
+        if attempts:
+            history = ", ".join(f"{status}={count}" for status, count in status_counts.items() if count)
+            if history:
+                outcome_text += f"; attempts {history}"
+        mean_text = f"{mean:.2f}" if mean is not None else "—"
+        target_text = f"{float(target['mean_f1_pct']):.2f}"
+        delta_text = f"{delta:+.2f}" if delta is not None else "—"
+        lines.append(
+            f"| {encoder} | {state} | {outcome_text} | {score_text} | {mean_text} | {target_text} | {target['n']} | {delta_text} |"
+        )
+    cache_corrections = [
+        correction
+        for run in runs
+        for correction in run["manifest"].get("reference", {}).get(
+            "runtime_seed_cache_compatibility", {}
+        ).get("seed_restore_events", [])
+    ]
+    if cache_corrections:
+        correction_text = ", ".join(
+            f"requested seed {item['requested_seed']} was restored after a cached config "
+            f"supplied seed {item['cached_config_seed']}"
+            for item in cache_corrections
+        )
+        lines.extend(
+            [
+                "For source-script attempts with dataset-cache hits, the PyABSA 2.4.3 cache key excludes `seed` while the cached object includes a serialized `ConfigManager`. The runner preserves the requested seed across cache restores, snapshots and checksums the installed cache-loader source, and records each correction. Recorded events: "
+                + correction_text
+                + ". The source scripts and declared training settings are unchanged.",
+                "",
+            ]
+        )
+    else:
+        lines.extend(
+            [
+                "Source-script attempts snapshot the installed PyABSA cache-loader source and check whether a dataset-cache hit replaced the requested seed. Any such restoration is recorded and verified before scores are reported.",
+                "",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); the three declared source-script seeds remain explicit and are not represented as a matched rerun. A below-target result is reported as measured and is not retried or retuned based on test scores.",
+            "",
+        ]
+    )
+    return lines
 
 
 def _load_runs(runs_dir: Path) -> list[dict[str, Any]]:
@@ -123,7 +490,7 @@ def _format_prf(value: dict[str, float] | None) -> str:
 
 
 def _optimizer_learning_rates(run: dict[str, Any]) -> list[float]:
-    resolved = run["manifest"].get("resolved_config", {})
+    resolved = run["manifest"].get("resolved_config") or {}
     groups = resolved.get("pyabsa", {}).get("optimizer_groups", [])
     try:
         return [float(group["learning_rate"]) for group in groups]
@@ -592,8 +959,36 @@ def build_report(
         lines.append(
             f"| {display} | {encoder} | {len(paired)}/{len(seeds)} | {delta_text} | {mean_delta} |"
         )
+    reference_protocol = matrix.get("reference_baseline_protocol")
+    if reference_protocol:
+        prior_protocol_id = reference_protocol.get("prior_protocol_id")
+        if prior_protocol_id:
+            historical_protocol = {**reference_protocol, "id": prior_protocol_id}
+            lines.extend(
+                _reference_baseline_section(
+                    all_runs,
+                    historical_protocol,
+                    heading="Historical PyABSA source-script reference (v1; test-selected)",
+                    context=(
+                        "This immutable v1 run set predates the dataset-cache seed-restoration fix. "
+                        "It remains historical evidence and is not pooled with the v2 full rerun."
+                    ),
+                )
+            )
+        lines.extend(
+            _reference_baseline_section(
+                all_runs,
+                reference_protocol,
+                heading="PyABSA source-script full rerun (v2; test-selected)",
+                context=(
+                    "This immutable v2 run set repeats all four unchanged local source scripts and all three "
+                    "declared seeds after the runtime cache-seed correction. The correction changes only the "
+                    "requested seed restored after a cache hit; source scripts and training settings remain unchanged."
+                ),
+            )
+        )
     lines.append("")
-    return "\n".join(lines)
+    return "\n".join(lines).rstrip() + "\n"
 
 
 def main() -> int:

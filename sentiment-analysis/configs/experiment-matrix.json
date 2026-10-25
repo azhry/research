@@ -8,6 +8,120 @@
       "label": "superseded uniform-rate protocol"
     }
   },
+  "reference_baseline_protocol": {
+    "id": "pyabsa-2.4.3-emcgcn-reference-max-test-v2-seed-cache-compatible",
+    "prior_protocol_id": "pyabsa-2.4.3-emcgcn-reference-max-test-v1",
+    "label": "full unchanged local PyABSA source-script rerun with seed-cache compatibility (test-selected; test-leaked)",
+    "seeds": [1, 2, 3],
+    "source_repository": "C:/Users/Lyrid/Documents/Projects/pyabsa",
+    "source_scripts": {
+      "indobert": {
+        "path": "code/train.py",
+        "sha256": "adbc73fcea6f6421e7742f9ca5578129b7a2d11f508904af882d95970a9047b6",
+        "model_id": "indolem/indobert-base-uncased",
+        "model_revision": "7ccb3cd0f5b08ffbaa465aade22328e8600e23eb",
+        "settings": {
+          "pretrained_bert": "indolem/indobert-base-uncased",
+          "batch_size": 16,
+          "patience": 999,
+          "log_step": -1,
+          "seed": [1, 2, 3],
+          "verbose": false,
+          "notice": "Training with a custom ASTE dataset.",
+          "overwrite_cache": false,
+          "gcn_dropout": 0.1,
+          "num_epoch": 10,
+          "max_seq_len": 80,
+          "learning_rate": 0.00002
+        }
+      },
+      "mbert": {
+        "path": "code/train_2.py",
+        "sha256": "befda8af5be72b9453cc5458f9c2aedeb24a62e563d97cbcda3f1a0ac06d3203",
+        "model_id": "google-bert/bert-base-multilingual-uncased",
+        "model_revision": "7cbf9a625e29989f6b9c6c2fa68234c304f7e38f",
+        "settings": {
+          "pretrained_bert": "google-bert/bert-base-multilingual-uncased",
+          "batch_size": 16,
+          "patience": 999,
+          "log_step": -1,
+          "seed": [1, 2, 3],
+          "verbose": false,
+          "notice": "Training with a custom ASTE dataset.",
+          "overwrite_cache": true,
+          "gcn_dropout": 0.1,
+          "num_epoch": 10,
+          "max_seq_len": 80,
+          "learning_rate": 0.00002
+        }
+      },
+      "xlmr": {
+        "path": "code/train_3.py",
+        "sha256": "ed840f7bd1ea2eb8a64ee0a5790a52d913f3b1b57c58cc1a945ad41e944dab16",
+        "model_id": "FacebookAI/xlm-roberta-base",
+        "model_revision": "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+        "settings": {
+          "pretrained_bert": "FacebookAI/xlm-roberta-base",
+          "batch_size": 16,
+          "patience": 999,
+          "log_step": -1,
+          "seed": [1, 2, 3],
+          "verbose": false,
+          "notice": "Training with a custom ASTE dataset.",
+          "overwrite_cache": true,
+          "gcn_dropout": 0.1,
+          "num_epoch": 10,
+          "max_seq_len": 80,
+          "learning_rate": 0.00002
+        }
+      },
+      "deberta_absa": {
+        "path": "code/train_5.py",
+        "sha256": "e02ba6a24f113a8cd2ed939eb6151c1fc7602ce3ba258ed02b67e7a2a765f205",
+        "model_id": "yangheng/deberta-v3-base-absa-v1.1",
+        "model_revision": "10c9dff335a44073e1352360c3a7bc54dc58eb01",
+        "settings": {
+          "pretrained_bert": "yangheng/deberta-v3-base-absa-v1.1",
+          "batch_size": 16,
+          "patience": 999,
+          "log_step": -1,
+          "seed": [1, 2, 3],
+          "verbose": false,
+          "notice": "Training with a custom ASTE dataset.",
+          "overwrite_cache": false,
+          "gcn_dropout": 0.1,
+          "num_epoch": 10,
+          "max_seq_len": 80,
+          "learning_rate": 0.00002
+        }
+      }
+    },
+    "metric": "MetricVisualizer Max-Test-F1",
+    "checkpoint_selection": "maximum test F1 is selected during training; this source reproduction is test-leaked and is not clean held-out evaluation",
+    "reported_targets": {
+      "mbert": {
+        "mean_f1_pct": 75.7196,
+        "n": 3,
+        "seed_f1_pct": [75.0273582841, 76.1248977366, 76.0064412238]
+      },
+      "indobert": {
+        "mean_f1_pct": 78.0112,
+        "n": 2,
+        "seed_f1_pct": [75.6102248703, 80.4120781528],
+        "seed_identities_recovered": false
+      },
+      "xlmr": {
+        "mean_f1_pct": 77.9701,
+        "n": 3,
+        "seed_f1_pct": [78.7806919643, 77.1745711403, 77.9550546541]
+      },
+      "deberta_absa": {
+        "mean_f1_pct": 80.7856,
+        "n": 3,
+        "seed_f1_pct": [80.4990682978, 79.6000645057, 82.2577955644]
+      }
+    }
+  },
   "seed_protocol": {
     "seeds": [0, 1, 2, 3, 52],
     "reason": "Original per-seed results and full seed list were not recovered before implementation.",

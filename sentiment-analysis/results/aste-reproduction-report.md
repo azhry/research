@@ -4,11 +4,11 @@ Status: **independent replication**. Original per-seed artifacts and the full se
 
 Active run protocol: `indonesian-aste-matrix-v3-pyabsa-native-groups`. Set config.learning_rate to 2e-5 and preserve PyABSA 2.4.3 EMCGCN native groups: 2e-5 for Transformer parameters and 1e-3 for graph/classifier parameters.
 
-**Chapter 5 target outcome: NOT MET (0/4 baseline means).**
+**Chapter 5 target outcome: NOT YET FULLY MEASURED.**
 
 The Chapter 5 draft describes selecting `Max-Test-F1` on the test data during training. This replication selects checkpoints on validation and evaluates the held-out test once, as required by the approved protocol. The original seed list, checkpoints, and run outputs were not recovered, so this is not a method-matched rerun. The primary measure retains all 418 implicit-aspect HoASA test triplets, which the current PyABSA EMCGCN adapter cannot predict; explicit-only scores below are secondary diagnostics and do not replace the primary outcome.
 
-On the same selected predictions, excluding implicit-aspect gold raises mean F1 by 6.50–7.11 points; 3/4 explicit-only means meet the historical references. Chapter 5 does not document whether its targets excluded implicit triplets, so this quantifies metric sensitivity without establishing exact comparability.
+The active native-group protocol has no complete runs yet, so its implicit-aspect sensitivity is not measured. Completed native-group and superseded uniform-rate runs are summarized separately below.
 
 ## Optimizer schedule correction
 
@@ -20,27 +20,27 @@ Declared seeds: `0, 1, 2, 3, 52`. Expected runs per cell: 5.
 
 ## Completed historical optimizer schedules
 
-The native-rate history contains 20 complete measured runs (five per encoder) but predates explicit protocol IDs; its manifests record the expected group rates and all runs remain under their original identities. Those full-gold means are below all four Chapter 5 references. The second schedule is the completed uniform-rate protocol, now superseded because its adapter overrode PyABSA's graph/classifier rates. Neither historical schedule is relabeled as an active-protocol run. The active v3 protocol has 20/20 complete HoASA EMCGCN seed runs; those measurements are reported separately below and are not pooled with historical schedules.
+The native-rate history contains 20 complete measured runs (five per encoder) but predates explicit protocol IDs; its manifests record the expected group rates and all runs remain under their original identities. Those full-gold means are below all four Chapter 5 references. The second schedule is the completed uniform-rate protocol, now superseded because its adapter overrode PyABSA's graph/classifier rates. Neither historical schedule is relabeled as an active-protocol run. The active v3 protocol has 0/20 complete HoASA EMCGCN seed runs; those measurements are reported separately below and are not pooled with historical schedules.
 
 The explicit-only scores below use the same predictions and exclude implicit-aspect triplets from the gold denominator. Chapter 5 does not document its implicit-label policy, and it selects the best test-set epoch while this replication selects on validation. These figures are sensitivity diagnostics, not evidence that a target has been reproduced.
 
 | Schedule | Encoder | Runs | Full-gold seed F1 (%) | Full-gold mean | Explicit-only seed F1 (%) | Explicit-only mean | Chapter 5 reference | Full-gold Δ | Explicit-only Δ |
 | --- | --- | ---: | --- | ---: | --- | ---: | ---: | ---: | ---: |
-| Native PyABSA groups | mbert | 5 | 0:70.15, 1:71.26, 2:69.63, 3:71.73, 52:71.52 | 70.86 | 0:76.76, 1:78.21, 2:76.07, 3:78.88, 52:78.49 | 77.68 | 75.72 | -4.86 | +1.96 |
-| Native PyABSA groups | indobert | 5 | 0:71.92, 1:72.10, 2:71.50, 3:72.20, 52:71.58 | 71.86 | 0:78.68, 1:78.93, 2:78.52, 3:79.14, 52:78.75 | 78.80 | 78.01 | -6.15 | +0.79 |
-| Native PyABSA groups | xlmr | 5 | 0:71.63, 1:73.05, 2:72.78, 3:73.40, 52:73.12 | 72.80 | 0:78.52, 1:80.16, 2:79.97, 3:80.58, 52:80.31 | 79.91 | 77.97 | -5.17 | +1.94 |
-| Native PyABSA groups | deberta_absa | 5 | 0:69.05, 1:70.77, 2:68.48, 3:69.51, 52:70.54 | 69.67 | 0:75.30, 1:77.47, 2:74.61, 3:76.11, 52:77.35 | 76.17 | 80.79 | -11.12 | -4.62 |
-| Superseded uniform groups | mbert | 5 | 0:67.51, 1:66.95, 2:67.16, 3:69.95, 52:69.25 | 68.16 | 0:73.69, 1:73.16, 2:73.70, 3:76.73, 52:75.86 | 74.63 | 75.72 | -7.56 | -1.09 |
-| Superseded uniform groups | indobert | 5 | 0:71.36, 1:71.53, 2:71.01, 3:72.25, 52:70.77 | 71.38 | 0:78.36, 1:78.29, 2:77.66, 3:79.11, 52:77.68 | 78.22 | 78.01 | -6.63 | +0.21 |
-| Superseded uniform groups | xlmr | 5 | 0:71.55, 1:69.48, 2:70.56, 3:69.67, 52:69.53 | 70.16 | 0:78.30, 1:75.82, 2:77.25, 3:75.98, 52:76.33 | 76.74 | 77.97 | -7.81 | -1.23 |
-| Superseded uniform groups | deberta_absa | 5 | 0:66.11, 1:65.04, 2:68.83, 3:64.31, 52:64.56 | 65.77 | 0:72.09, 1:71.20, 2:75.47, 3:70.02, 52:71.19 | 71.99 | 80.79 | -15.02 | -8.80 |
+| Native PyABSA groups | mbert | 0 | — | — | — | — | 75.72 | — | — |
+| Native PyABSA groups | indobert | 0 | — | — | — | — | 78.01 | — | — |
+| Native PyABSA groups | xlmr | 0 | — | — | — | — | 77.97 | — | — |
+| Native PyABSA groups | deberta_absa | 0 | — | — | — | — | 80.79 | — | — |
+| Superseded uniform groups | mbert | 0 | — | — | — | — | 75.72 | — | — |
+| Superseded uniform groups | indobert | 0 | — | — | — | — | 78.01 | — | — |
+| Superseded uniform groups | xlmr | 0 | — | — | — | — | 77.97 | — | — |
+| Superseded uniform groups | deberta_absa | 0 | — | — | — | — | 80.79 | — | — |
 
 | Train → test | Architecture | Encoder | State | n | Seed F1 values | Mean | SD | Median | Min | Max | Chapter 5 target | Δ | Target status |
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| hoasa | emcgcn | mbert | complete | 5/5 | 0:70.15, 1:71.26, 2:69.63, 3:71.73, 52:71.52 | 70.86 | 0.92 | 71.26 | 69.63 | 71.73 | 75.72 | -4.86 | below |
-| hoasa | emcgcn | indobert | complete | 5/5 | 0:71.92, 1:72.10, 2:71.50, 3:72.20, 52:71.58 | 71.86 | 0.31 | 71.92 | 71.50 | 72.20 | 78.01 | -6.15 | below |
-| hoasa | emcgcn | xlmr | complete | 5/5 | 0:71.63, 1:73.05, 2:72.78, 3:73.40, 52:73.12 | 72.80 | 0.69 | 73.05 | 71.63 | 73.40 | 77.97 | -5.17 | below |
-| hoasa | emcgcn | deberta_absa | complete | 5/5 | 0:69.05, 1:70.77, 2:68.48, 3:69.51, 52:70.54 | 69.67 | 0.98 | 69.51 | 68.48 | 70.77 | 80.79 | -11.12 | below |
+| hoasa | emcgcn | mbert | smoke only | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
+| hoasa | emcgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 78.01 | — | not measured |
+| hoasa | emcgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 77.97 | — | not measured |
+| hoasa | emcgcn | deberta_absa | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 80.79 | — | not measured |
 | hoasa | ssgcn | mbert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
 | hoasa | ssgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | — | — | not applicable |
@@ -62,10 +62,10 @@ These rows summarize the active native-group protocol. The primary full-gold met
 
 | Encoder | Chapter 5 target | Primary full-gold mean | Primary Δ | Explicit-only mean (diagnostic) | Diagnostic Δ | F1 change when implicit gold is excluded |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| mbert | 75.72 | 70.86 | -4.86 | 77.68 | 1.96 | 6.82 |
-| indobert | 78.01 | 71.86 | -6.15 | 78.80 | 0.79 | 6.94 |
-| xlmr | 77.97 | 72.80 | -5.17 | 79.91 | 1.94 | 7.11 |
-| deberta_absa | 80.79 | 69.67 | -11.12 | 76.17 | -4.62 | 6.50 |
+| mbert | 75.72 | — | — | — | — | — |
+| indobert | 78.01 | — | — | — | — | — |
+| xlmr | 77.97 | — | — | — | — | — |
+| deberta_absa | 80.79 | — | — | — | — | — |
 
 ## HoASA EMCGCN attempt history
 
@@ -73,43 +73,10 @@ Complete seed runs contribute to the score table. Smoke, failed, and interrupted
 
 | Encoder | Complete seed runs | Smoke attempts | Failed attempts | Interrupted attempts |
 | --- | ---: | ---: | ---: | ---: |
-| mbert | 5/5 | 0 | 0 | 1 |
-| indobert | 5/5 | 0 | 0 | 0 |
-| xlmr | 5/5 | 0 | 0 | 0 |
-| deberta_absa | 5/5 | 0 | 0 | 1 |
-
-## Superseded uniform-rate attempt history
-
-The superseded uniform-rate protocol queue ended with all 20 declared seed conditions complete and no queue-level failures. Earlier failed and interrupted attempts remain in the run archive and are not scores.
-
-| Encoder | Complete runs | Failed attempts | Interrupted attempts |
-| --- | ---: | ---: | ---: |
-| mbert | 5/5 | 5 | 1 |
-| indobert | 5/5 | 5 | 0 |
-| xlmr | 5/5 | 5 | 1 |
-| deberta_absa | 5/5 | 5 | 1 |
-
-## Historical native-rate attempt history
-
-These unprotocolized manifests record the native group rates. Only complete runs with metrics contribute to the historical score table; smoke, failed, and interrupted attempts remain excluded.
-
-| Encoder | Complete runs | Failed attempts | Interrupted attempts | Smoke attempts |
-| --- | ---: | ---: | ---: | ---: |
-| mbert | 5/5 | 0 | 0 | 3 |
-| indobert | 5/5 | 0 | 0 | 0 |
-| xlmr | 5/5 | 0 | 0 | 0 |
-| deberta_absa | 5/5 | 0 | 0 | 0 |
-
-## Unprotocolized attempts without optimizer metadata
-
-These older failed, interrupted, or smoke manifests do not record resolved optimizer groups, so they cannot be assigned to either schedule and contribute no scores. They remain in the run archive.
-
-| Encoder | Failed | Interrupted | Smoke |
-| --- | ---: | ---: | ---: |
-| mbert | 6 | 3 | 0 |
-| indobert | 0 | 0 | 0 |
-| xlmr | 1 | 0 | 0 |
-| deberta_absa | 2 | 0 | 0 |
+| mbert | 0/5 | 2 | 0 | 0 |
+| indobert | 0/5 | 0 | 0 | 0 |
+| xlmr | 0/5 | 0 | 0 | 0 |
+| deberta_absa | 0/5 | 0 | 0 | 0 |
 
 ## Secondary metrics
 
@@ -117,10 +84,10 @@ Each value is mean precision/recall/F1 (%) over complete seeds only. The full-so
 
 | Train → test | Architecture | Encoder | Explicit-only triplet P/R/F1 | Aspect P/R/F1 | Opinion P/R/F1 (full source) | Opinion P/R/F1 (explicit triplets) | POS P/R/F1 | NEU P/R/F1 | NEG P/R/F1 |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| hoasa | emcgcn | mbert | 82.31/73.66/77.68 | 91.24/79.45/84.91 | 91.63/68.25/78.20 | 89.52/79.49/84.17 | 86.08/62.77/72.52 | 42.00/6.67/10.11 | 77.49/62.06/68.88 |
-| hoasa | emcgcn | indobert | 83.82/74.45/78.80 | 91.73/79.56/85.19 | 93.05/68.66/78.98 | 91.26/80.29/85.39 | 86.38/63.56/73.18 | 41.82/6.67/10.00 | 80.58/62.55/70.35 |
-| hoasa | emcgcn | xlmr | 86.02/74.62/79.91 | 93.24/79.32/85.72 | 94.42/67.98/79.04 | 92.63/79.54/85.58 | 89.36/63.53/74.26 | 26.67/4.44/7.33 | 81.60/62.97/71.06 |
-| hoasa | emcgcn | deberta_absa | 77.97/74.57/76.17 | 88.80/80.38/84.36 | 89.31/69.64/78.24 | 86.87/80.76/83.68 | 82.12/63.45/71.52 | 0.00/0.00/0.00 | 72.72/63.02/67.46 |
+| hoasa | emcgcn | mbert | — | — | — | — | — | — | — |
+| hoasa | emcgcn | indobert | — | — | — | — | — | — | — |
+| hoasa | emcgcn | xlmr | — | — | — | — | — | — | — |
+| hoasa | emcgcn | deberta_absa | — | — | — | — | — | — | — |
 | hoasa | ssgcn | mbert | — | — | — | — | — | — | — |
 | hoasa | ssgcn | indobert | — | — | — | — | — | — | — |
 | hoasa | ssgcn | xlmr | — | — | — | — | — | — | — |
@@ -159,3 +126,42 @@ Delta is SSGCN minus EMCGCN in test triplet micro-F1 percentage points, paired b
 | casa | xlmr | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — |
 | casa | deberta_absa | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — |
 | hoasa → casa | deberta_absa | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — |
+
+## Historical PyABSA source-script reference (v1; test-selected)
+
+This immutable v1 run set predates the dataset-cache seed-restoration fix. It remains historical evidence and is not pooled with the v2 full rerun.
+This reproduction runs the four unchanged local PyABSA source scripts, one per encoder, with each script's declared seeds `1, 2, 3`. It reports `MetricVisualizer Max-Test-F1`, which selects the best checkpoint using test-set scores during training. These measurements are test-leaked reference diagnostics and are not clean held-out estimates; they are never pooled with the validation-selected v3 results above.
+
+Every complete row below is recomputed from the three per-seed metrics in its source-run manifest. The source script, resolved configuration, cached model revision, train/dev/test data copies, and every saved run artifact checksum are validated before the row is emitted. Workspace source/config files are snapshotted under each run's `provenance/workspace-source/` so later code edits do not invalidate historical provenance.
+PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. The runner records the installed instructor source checksum, snapshots that source, and verifies the three seed logs (`-1` on initialization, then the resolved value) and `Num steps` before accepting this normalization. Any earlier validation rejection corrected under this rule retains the byte-for-byte original failed manifest and a checksum-linked correction record; source scripts and training settings remain unchanged.
+
+| Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
+| indobert | failed | 0/3; attempts failed=1 | 1:—, 2:—, 3:— | — | 78.01 | 2 | — |
+| mbert | not run | 0/3 | 1:—, 2:—, 3:— | — | 75.72 | 3 | — |
+| xlmr | not run | 0/3 | 1:—, 2:—, 3:— | — | 77.97 | 3 | — |
+| deberta_absa | failed | 0/3; attempts failed=1 | 1:—, 2:—, 3:— | — | 80.79 | 3 | — |
+Source-script attempts snapshot the installed PyABSA cache-loader source and check whether a dataset-cache hit replaced the requested seed. Any such restoration is recorded and verified before scores are reported.
+
+
+Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); the three declared source-script seeds remain explicit and are not represented as a matched rerun. A below-target result is reported as measured and is not retried or retuned based on test scores.
+
+
+## PyABSA source-script full rerun (v2; test-selected)
+
+This immutable v2 run set repeats all four unchanged local source scripts and all three declared seeds after the runtime cache-seed correction. The correction changes only the requested seed restored after a cache hit; source scripts and training settings remain unchanged.
+This reproduction runs the four unchanged local PyABSA source scripts, one per encoder, with each script's declared seeds `1, 2, 3`. It reports `MetricVisualizer Max-Test-F1`, which selects the best checkpoint using test-set scores during training. These measurements are test-leaked reference diagnostics and are not clean held-out estimates; they are never pooled with the validation-selected v3 results above.
+
+Every complete row below is recomputed from the three per-seed metrics in its source-run manifest. The source script, resolved configuration, cached model revision, train/dev/test data copies, and every saved run artifact checksum are validated before the row is emitted. Workspace source/config files are snapshotted under each run's `provenance/workspace-source/` so later code edits do not invalidate historical provenance.
+PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. The runner records the installed instructor source checksum, snapshots that source, and verifies the three seed logs (`-1` on initialization, then the resolved value) and `Num steps` before accepting this normalization. Any earlier validation rejection corrected under this rule retains the byte-for-byte original failed manifest and a checksum-linked correction record; source scripts and training settings remain unchanged.
+
+| Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
+| indobert | complete; test-leaked | 3/3; attempts failed=2 | 1:75.61, 2:76.05, 3:80.41 | 77.36 | 78.01 | 2 | -0.65 |
+| mbert | complete; test-leaked | 3/3; attempts failed=1, interrupted=1 | 1:75.03, 2:76.12, 3:76.01 | 75.72 | 75.72 | 3 | -0.00 |
+| xlmr | complete; test-leaked | 3/3; attempts interrupted=1 | 1:78.78, 2:77.17, 3:77.96 | 77.97 | 77.97 | 3 | +0.00 |
+| deberta_absa | complete; test-leaked | 3/3; attempts failed=1, interrupted=1 | 1:76.26, 2:75.11, 3:82.26 | 77.88 | 80.79 | 3 | -2.91 |
+For source-script attempts with dataset-cache hits, the PyABSA 2.4.3 cache key excludes `seed` while the cached object includes a serialized `ConfigManager`. The runner preserves the requested seed across cache restores, snapshots and checksums the installed cache-loader source, and records each correction. Recorded events: requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2. The source scripts and declared training settings are unchanged.
+
+
+Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); the three declared source-script seeds remain explicit and are not represented as a matched rerun. A below-target result is reported as measured and is not retried or retuned based on test scores.
