@@ -13,9 +13,17 @@
 The existing four-system notebook is the reproduction baseline. The specification adds
 two representation diagnostics—query plus generated text without fusion, and
 the same generated text alone—plus independent E5 RRF sweeps for both transformed
-representations. It also specifies one code-trained reranker comparison on the
-same E5 candidate pool. The new code-trained model has not been run; it must pass
-a real weight-loading and finite-score preflight on CPU before a complete comparison.
+representations. Its opt-in code-reranker path adds one code-trained reranker on the
+same E5 candidate IDs without changing the original four conditions. It pins
+NamanAgnih0tri/code-reranker-miniLM-staqc at revision
+9bcf5f1cceef4914e2fc564b2e4ee78410626702, uses real CPU CrossEncoder query/code
+pairs, and requires a real-weight finite-score preflight before complete runs.
+The path validates and reuses checksummed baseline rankings, selects the code
+fusion weight on all 500 valid queries, and applies only that frozen weight to
+the 500 test queries.
+Completed evidence remains in its preserved artifact directory; new code-reranker
+runs default to `artifacts/code_reranker/`. Preflight outputs are
+operational evidence, and test outputs remain retrospective and exploratory.
 
 The R1 CosQA-only alternative is selected. R3's second-dataset request and
 Flan-T5-base quality concern remain unresolved and must be stated as limitations.
@@ -54,7 +62,7 @@ Activate the project's pinned `.venv` from the `code-retrieval` directory and
 register its kernel once:
 
 ```bash
-python -m ipykernel install --user --name azh-514-e5 --display-name azh-514-e5
+python -m ipykernel install --user --name code-retrieval --display-name code-retrieval
 ```
 
 Execute an existing notebook directly with Jupyter, selecting that kernel.
@@ -63,7 +71,7 @@ global or otherwise mismatched kernel fails before producing benchmark results.
 For example, from `code-retrieval`:
 
 ```bash
-python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank.executed.ipynb --output-dir artifacts/runs/20260928T111402089Z_full-rerun
+python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank.executed.ipynb --output-dir artifacts/runs/20260928T111402089Z_full-rerun
 ```
 
 Keep `python` bound to the active `.venv` so both nbconvert and the kernel use
@@ -79,13 +87,13 @@ artifact and cache identity. All primary experiments use CPU inference and the
 same 1,000-document candidate depth.
 
 ```bash
-E5_BASELINE_MODE=benchmark E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_baseline_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline
+E5_BASELINE_MODE=benchmark E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_baseline_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline
 ```
 
 To execute the full notebook directly from the `code-retrieval` directory:
 
 ```bash
-E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_baseline_full_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline_full
+E5_BASELINE_BATCH_SIZE=128 E5_BASELINE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_baseline_full_experiment.ipynb --output e5_baseline_full.executed.ipynb --output-dir artifacts/e5_baseline_full
 ```
 
 On PowerShell, use `$env:E5_BASELINE_MODE='benchmark'` in the session before the
@@ -109,7 +117,7 @@ executions. From the `code-retrieval` directory, first use benchmark mode with
 the complete `valid` split. Replace `RUNID` with a unique output suffix:
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_selection.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/selection-RUNID
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_selection.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/selection-RUNID
 ```
 
 The selection run evaluates all 21 weights from 0.00 through 1.00, in 0.05
@@ -122,8 +130,29 @@ that exact path for the next execution with the complete `test` split, and use
 a new `RUNID` for its notebook-output directory:
 
 ```bash
-E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/SELECTIONID/selection_manifest.json E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_test.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/test-RUNID
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=test E5_HYDE_RERANK_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/SELECTIONID/selection_manifest.json E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/representation_fusion E5_HYDE_RERANK_CACHE_DIR=artifacts/representation_fusion/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output e5_hyde_rerank_test.executed.ipynb --output-dir artifacts/representation_fusion/notebooks/test-RUNID
 ```
+
+For the code-reranker path, enable `E5_HYDE_RERANK_CODE_RERANKER=1` and set
+`E5_HYDE_RERANK_RANKING_REPLAY=code_reranker`. Point
+`E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST` at the complete baseline valid-selection manifest for
+preflight and selection. Run the one-pair
+preflight first, then complete validation selection, then test evaluation with
+the generated code-reranker selection manifest:
+
+```bash
+E5_HYDE_RERANK_MODE=benchmark E5_HYDE_RERANK_QRELS_SPLIT=valid E5_HYDE_RERANK_CODE_RERANKER=1 E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1 E5_HYDE_RERANK_RANKING_REPLAY=code_reranker E5_HYDE_RERANK_REPLAY_VALID_SELECTION_MANIFEST=artifacts/representation_fusion/selection_runs/VALID_SELECTION_RUNID/selection_manifest.json E5_HYDE_RERANK_CODE_BATCH_SIZE=128 E5_HYDE_RERANK_BATCH_SIZE=128 E5_HYDE_RERANK_TORCH_THREADS=8 E5_HYDE_RERANK_ARTIFACT_DIR=artifacts/code_reranker E5_HYDE_RERANK_CACHE_DIR=artifacts/code_reranker/cache python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_rerank_experiment.ipynb --output code_reranker_preflight.executed.ipynb --output-dir artifacts/code_reranker/notebooks/preflight-RUNID
+```
+
+After a passed preflight, remove `E5_HYDE_RERANK_CODE_PREFLIGHT_ONLY=1` and
+use a new output directory for full validation selection. For the separate test
+execution, change the qrels split to `test`, set
+`E5_HYDE_RERANK_SELECTION_MANIFEST` to the generated code-reranker selection manifest. Set
+`E5_HYDE_RERANK_REPLAY_TEST_RESULT` to the preserved complete test
+result, and use another unique notebook-output directory. Keep batch size 128, eight
+CPU threads, CPU float32 inference, max length 512, and the complete 500-query
+split and 20,604-document corpus. These environment controls add only the code
+reranker condition; the original combined system remains unchanged.
 
 Test evaluation fails closed if the manifest digest, dataset/model controls,
 runtime, source or notebook hashes, validation baseline parity, or valid/test
@@ -147,7 +176,7 @@ fusions. Validation selection writes the same ablation files beside its
 manifest. The run-scoped `representation_ablation_per_query.csv` stores paired
 primary and secondary metrics and deltas for the same queries. `result.json` records the shared
 generation hash, both representation hashes, and paths and hashes for raw and
-fused rankings. Historical AZH-527 replay cannot supply the hypothesis-only
+fused rankings. Historical replay cannot supply the hypothesis-only
 ranking, so representation selection requires a fresh complete valid run.
 
 Each comparison run records stage-level cache load, compute, and save times in
@@ -164,8 +193,8 @@ shows cache-load cost separately. Smoke results remain wiring evidence, not
 benchmark evidence.
 
 The notebook's tagged query-level and secondary-metric analyses are optional
-and skipped by default. Set `E5_HYDE_RERANK_RUN_POSTHOC=1` when the separate
-AZH-519 analysis artifacts are available and those analyses are intended.
+and skipped by default. To run them, set `E5_HYDE_RERANK_RUN_POSTHOC=1` and
+`E5_HYDE_RERANK_POSTHOC_ANALYSIS_RUN_DIR` to the saved analysis run directory.
 
 An optional `E5_HYDE_RERANK_RANKING_REPLAY=historical` mode can replay the
 preserved real-model ranking artifacts when `E5_HYDE_RERANK_RANKING_REPLAY_ROOT`
@@ -194,13 +223,13 @@ device, seed, cache identity, timings, and provenance are recorded.
 The default is a real-model smoke run and is not benchmark evidence:
 
 ```bash
-python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_rerank_experiment.ipynb --output e5_rerank_smoke.executed.ipynb --output-dir artifacts/e5_rerank
+python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_rerank_experiment.ipynb --output e5_rerank_smoke.executed.ipynb --output-dir artifacts/e5_rerank
 ```
 
 Run the complete comparison with:
 
 ```bash
-E5_RERANK_MODE=benchmark E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_rerank_experiment.ipynb --output e5_rerank_full.executed.ipynb --output-dir artifacts/e5_rerank
+E5_RERANK_MODE=benchmark E5_RERANK_E5_BATCH_SIZE=128 E5_RERANK_BATCH_SIZE=128 E5_RERANK_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_rerank_experiment.ipynb --output e5_rerank_full.executed.ipynb --output-dir artifacts/e5_rerank
 ```
 
 On PowerShell, set the variables with `$env:E5_RERANK_MODE='benchmark'` and
@@ -229,7 +258,7 @@ The smoke notebook run is wiring evidence only:
 
 ```bash
 cd code-retrieval
-E5_HYDE_MODE=smoke python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_experiment.ipynb --output e5_hyde_smoke.executed.ipynb --output-dir artifacts/e5_hyde
+E5_HYDE_MODE=smoke python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_experiment.ipynb --output e5_hyde_smoke.executed.ipynb --output-dir artifacts/e5_hyde
 ```
 
 Run the complete declared benchmark only when model and dataset downloads and
@@ -237,7 +266,7 @@ available memory are sufficient:
 
 ```bash
 cd code-retrieval
-E5_HYDE_MODE=benchmark E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=azh-514-e5 --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_experiment.ipynb --output e5_hyde_full.executed.ipynb --output-dir artifacts/e5_hyde
+E5_HYDE_MODE=benchmark E5_HYDE_BATCH_SIZE=128 E5_HYDE_TORCH_THREADS=8 python -m nbconvert --to notebook --execute --ExecutePreprocessor.kernel_name=code-retrieval --ExecutePreprocessor.timeout=-1 notebooks/e5_hyde_experiment.ipynb --output e5_hyde_full.executed.ipynb --output-dir artifacts/e5_hyde
 ```
 
 HyDE output is written below `code-retrieval/artifacts/e5_hyde/`. Generated

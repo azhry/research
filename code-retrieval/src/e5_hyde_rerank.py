@@ -45,8 +45,14 @@ from e5_baseline import (
 )
 
 
-CODE_VERSION = "e5-hyde-rerank-v17-representation-ablations"
+CODE_VERSION = "e5-hyde-rerank-v18-code-reranker"
 SYSTEM_IDS = ["e5", "e5_hyde", "e5_rerank", "e5_hyde_rerank"]
+CODE_RERANKER_SYSTEM_ID = "e5_code_rerank"
+CODE_RERANKER_MODEL_ID = "NamanAgnih0tri/code-reranker-miniLM-staqc"
+CODE_RERANKER_MODEL_REVISION = "9bcf5f1cceef4914e2fc564b2e4ee78410626702"
+CODE_RERANKER_MODEL_CARD = (
+    "https://huggingface.co/NamanAgnih0tri/code-reranker-miniLM-staqc"
+)
 DEFAULT_RRF_K = 60
 DEFAULT_HYDE_PROMPT = (
     "Answer this programming question with a concise solution: {query}"
@@ -57,6 +63,28 @@ DEFAULT_HYDE_FALLBACK_PROMPTS = (
     "Write code for: {query}",
     "Give a Python example for: {query}",
 )
+
+
+def _code_reranker_training_context() -> dict[str, Any]:
+    """Return publisher-reported provenance and the unresolved overlap boundary."""
+
+    return {
+        "model_card_url": CODE_RERANKER_MODEL_CARD,
+        "model_card_claims_audited": False,
+        "training_dataset": "StaQC SCA Stack Overflow question-code pairs",
+        "training_language": "Python",
+        "publisher_reported_training_examples": 85294,
+        "publisher_reported_samples_including_negatives": 170588,
+        "evaluation_dataset": "CoIR-Retrieval/cosqa",
+        "domain_note": (
+            "The model card describes Stack Overflow question-to-Python-code "
+            "training; this study evaluates the pinned CosQA query/corpus collection."
+        ),
+        "training_data_overlap_with_cosqa": (
+            "unknown; record-level overlap was not audited"
+        ),
+        "publisher_reported_performance_used_as_evidence": False,
+    }
 
 
 def experiment_notebook_sha256(path: str | Path) -> str:
@@ -79,7 +107,7 @@ def experiment_notebook_sha256(path: str | Path) -> str:
 
 @dataclass(frozen=True)
 class ExperimentConfig(BaselineConfig):
-    """Explicit controls shared by all four comparison systems."""
+    """Explicit controls shared by the CosQA comparison systems."""
 
     candidate_depth: int = 1000
     batch_size: int = 128
@@ -100,10 +128,17 @@ class ExperimentConfig(BaselineConfig):
     reranker_batch_size: int = 128
     reranker_max_length: int = 512
     reranker_device: str = "cpu"
+    code_reranker_enabled: bool = False
+    code_reranker_model_id: str = CODE_RERANKER_MODEL_ID
+    code_reranker_model_revision: str = CODE_RERANKER_MODEL_REVISION
+    code_reranker_batch_size: int = 128
+    code_reranker_max_length: int = 512
+    code_reranker_device: str = "cpu"
     rrf_k: int = DEFAULT_RRF_K
     hyde_fusion_weights: tuple[float, float] = (0.65, 0.35)
     hypothesis_only_fusion_weights: tuple[float, float] = (0.65, 0.35)
     reranker_fusion_weights: tuple[float, float] = (0.8, 0.2)
+    code_reranker_fusion_weights: tuple[float, float] = (0.8, 0.2)
     combined_fusion_weights: tuple[float, float] = (0.75, 0.25)
 
     def as_dict(self) -> dict[str, Any]:
@@ -114,6 +149,7 @@ class ExperimentConfig(BaselineConfig):
         values["hyde_fusion_weights"] = list(self.hyde_fusion_weights)
         values["hypothesis_only_fusion_weights"] = list(self.hypothesis_only_fusion_weights)
         values["reranker_fusion_weights"] = list(self.reranker_fusion_weights)
+        values["code_reranker_fusion_weights"] = list(self.code_reranker_fusion_weights)
         values["combined_fusion_weights"] = list(self.combined_fusion_weights)
         return values
 
@@ -134,16 +170,32 @@ class ExperimentConfig(BaselineConfig):
             )
         if self.reranker_batch_size <= 0 or self.reranker_max_length <= 0:
             raise ValueError("reranker_batch_size and reranker_max_length must be positive")
+        if self.code_reranker_batch_size <= 0 or self.code_reranker_max_length <= 0:
+            raise ValueError(
+                "code_reranker_batch_size and code_reranker_max_length must be positive"
+            )
+        if self.code_reranker_enabled and self.code_reranker_device != "cpu":
+            raise ValueError("the pinned code-reranker comparison requires CPU inference")
         if self.rrf_k <= 0:
             raise ValueError("rrf_k must be positive")
         for name, weights in (
             ("hyde_fusion_weights", self.hyde_fusion_weights),
             ("hypothesis_only_fusion_weights", self.hypothesis_only_fusion_weights),
             ("reranker_fusion_weights", self.reranker_fusion_weights),
+            ("code_reranker_fusion_weights", self.code_reranker_fusion_weights),
             ("combined_fusion_weights", self.combined_fusion_weights),
         ):
             if len(weights) != 2 or any(weight < 0 for weight in weights) or not any(weights):
                 raise ValueError(f"{name} must contain two non-negative weights, one positive")
+
+
+def experiment_system_ids(config: ExperimentConfig) -> list[str]:
+    """Return primary systems for this configured run."""
+
+    systems = list(SYSTEM_IDS)
+    if config.code_reranker_enabled:
+        systems.append(CODE_RERANKER_SYSTEM_ID)
+    return systems
 
 
 @dataclass(frozen=True)
@@ -153,9 +205,13 @@ class ModelRevisions:
     e5: str
     hyde: str
     reranker: str
+    code_reranker: str | None = None
 
     def as_dict(self) -> dict[str, str]:
-        return {"e5": self.e5, "hyde": self.hyde, "reranker": self.reranker}
+        revisions = {"e5": self.e5, "hyde": self.hyde, "reranker": self.reranker}
+        if self.code_reranker is not None:
+            revisions["code_reranker"] = self.code_reranker
+        return revisions
 
 
 @dataclass
@@ -481,6 +537,288 @@ class CrossEncoderReranker:
         )
 
 
+class CodeCrossEncoderReranker:
+    """Pinned StaQC-trained pair scorer for the same E5 candidate pool."""
+
+    def __init__(
+        self,
+        config: ExperimentConfig,
+        *,
+        batch_observer: Callable[..., None] | None = None,
+    ):
+        if not config.code_reranker_enabled:
+            raise ValueError("enable the code-trained reranker before loading it")
+        try:
+            from sentence_transformers import CrossEncoder
+        except ImportError as exc:
+            raise RuntimeError("sentence-transformers is required for code re-ranking") from exc
+
+        self.config = config
+        self.batch_observer = batch_observer
+        self.device = config.code_reranker_device
+        self.model = CrossEncoder(
+            config.code_reranker_model_id,
+            revision=config.code_reranker_model_revision,
+            max_length=config.code_reranker_max_length,
+            device=self.device,
+        )
+        self.resolved_revision = _require_resolved_revision(
+            self.model,
+            config.code_reranker_model_revision,
+            "code cross-encoder",
+        )
+
+    def score_pairs(self, pairs: Sequence[tuple[str, str]]) -> np.ndarray:
+        if not pairs:
+            raise ValueError("cannot score an empty candidate set")
+        if self.batch_observer is None:
+            scores = self.model.predict(
+                list(pairs),
+                batch_size=self.config.code_reranker_batch_size,
+                show_progress_bar=True,
+                convert_to_numpy=True,
+            )
+        else:
+            with observe_module_batches(
+                self.model,
+                device=self.device,
+                stage="cross_encoder_scoring",
+                observer=self.batch_observer,
+                unit="query_candidate_pairs",
+                fallback_batch_size=self.config.code_reranker_batch_size,
+            ):
+                scores = self.model.predict(
+                    list(pairs),
+                    batch_size=self.config.code_reranker_batch_size,
+                    show_progress_bar=True,
+                    convert_to_numpy=True,
+                )
+        scores = np.asarray(scores, dtype=np.float32).reshape(-1)
+        if scores.shape[0] != len(pairs) or not np.isfinite(scores).all():
+            raise ValueError("code cross-encoder returned invalid candidate scores")
+        return scores
+
+    def preflight(
+        self,
+        query_text: str,
+        code_text: str,
+        *,
+        query_id: str,
+        document_id: str,
+    ) -> dict[str, Any]:
+        score = float(self.score_pairs([(query_text, code_text)])[0])
+        if not np.isfinite(score):
+            raise ValueError("code reranker preflight produced a non-finite score")
+        model_config = getattr(getattr(self.model, "model", None), "config", None)
+        tokenizer = getattr(self.model, "tokenizer", None)
+        activation = getattr(self.model, "default_activation_function", None)
+        return {
+            "status": "passed",
+            "real_model_weights": True,
+            "pair_count": 1,
+            "query_id": str(query_id),
+            "document_id": str(document_id),
+            "finite_score": score,
+            "score_direction": "higher_score_ranks_first",
+            "score_output": "sentence-transformers CrossEncoder.predict default output",
+            "configured_revision": self.config.code_reranker_model_revision,
+            "resolved_revision": self.resolved_revision,
+            "device": self.device,
+            "tokenizer": {
+                "class": None if tokenizer is None else type(tokenizer).__name__,
+                "name_or_path": None if tokenizer is None else getattr(tokenizer, "name_or_path", None),
+            },
+            "model_output": {
+                "num_labels": None if model_config is None else getattr(model_config, "num_labels", None),
+                "problem_type": None if model_config is None else getattr(model_config, "problem_type", None),
+                "activation": None if activation is None else type(activation).__name__,
+                "parameter_dtype": _module_precision(self.model),
+            },
+            "input_format": "CrossEncoder.predict([(query_text, corpus_text)])",
+            "max_length": self.config.code_reranker_max_length,
+            "truncation": "sentence-transformers tokenizer truncation at max_length",
+        }
+
+    def rerank(
+        self,
+        query_representations: Mapping[str, str],
+        corpus: Mapping[str, Mapping[str, str]],
+        rankings: Mapping[str, Mapping[str, float]],
+    ) -> dict[str, dict[str, float]]:
+        return rerank_candidate_rankings(
+            rankings,
+            query_representations,
+            corpus,
+            self.score_pairs,
+        )
+
+    def close(self) -> None:
+        del self.model
+
+
+def add_code_reranker_rankings(
+    loaded_replay: dict[str, Any],
+    config: ExperimentConfig,
+    run_data: RunData,
+    *,
+    cost_recorder: RuntimeCostRecorder,
+) -> dict[str, Any]:
+    """Score the replayed E5 candidate pool with real pinned code-model weights."""
+
+    if not config.code_reranker_enabled:
+        return loaded_replay
+    rankings = loaded_replay["rankings"]
+    source_rankings = rankings["e5_for_rerank"]
+    if not source_rankings:
+        raise ValueError("code-reranker replay has no E5 candidate rankings")
+    query_id = next(iter(source_rankings))
+    document_id = next(iter(source_rankings[query_id]))
+    with cost_recorder.phase("model_load_code_reranker", "startup"):
+        reranker = CodeCrossEncoderReranker(
+            config,
+            batch_observer=cost_recorder.observe_batch,
+        )
+    try:
+        preflight_started = time.perf_counter()
+        with cost_recorder.phase("code_reranker_preflight", "online_query"):
+            preflight = reranker.preflight(
+                run_data.queries[query_id],
+                run_data.corpus[document_id]["text"],
+                query_id=query_id,
+                document_id=document_id,
+            )
+        preflight_seconds = time.perf_counter() - preflight_started
+        scoring_started = time.perf_counter()
+        with cost_recorder.phase("code_reranker_scoring", "online_query"):
+            code_rankings = reranker.rerank(
+                run_data.queries,
+                run_data.corpus,
+                source_rankings,
+            )
+        scoring_seconds = time.perf_counter() - scoring_started
+    finally:
+        reranker.close()
+    _validate_rankings(
+        code_rankings,
+        run_data,
+        label="code reranker",
+        candidate_depth=config.candidate_depth,
+    )
+    for current_query_id in run_data.queries:
+        if set(code_rankings[current_query_id]) != set(source_rankings[current_query_id]):
+            raise ValueError(
+                f"code reranker changed the E5 candidate pool for {current_query_id}"
+            )
+    loaded_replay["rankings"]["code_reranker"] = code_rankings
+    loaded_replay["revisions"] = replace(
+        loaded_replay["revisions"],
+        code_reranker=reranker.resolved_revision,
+    )
+    loaded_replay["code_reranker_preflight"] = preflight
+    source_provenance = loaded_replay["source_provenance"]
+    source_provenance.update(
+        {
+            "classification": "saved_baseline_rankings_plus_fresh_code_model_inference",
+            "fresh_model_inference": True,
+            "real_model_inference_inputs": True,
+            "synthetic_scores": False,
+            "code_reranker_preflight": preflight,
+            "code_reranker": {
+                "model_id": config.code_reranker_model_id,
+                "configured_revision": config.code_reranker_model_revision,
+                "resolved_revision": loaded_replay["revisions"].code_reranker,
+                "device": config.code_reranker_device,
+                "batch_size": config.code_reranker_batch_size,
+                "max_length": config.code_reranker_max_length,
+                "pair_count": sum(
+                    len(values) for values in code_rankings.values()
+                ),
+                "preflight_seconds": preflight_seconds,
+                "scoring_seconds": scoring_seconds,
+                "candidate_contract": candidate_contract(code_rankings),
+                "score_direction": "higher_score_ranks_first",
+                "training_context": _code_reranker_training_context(),
+            },
+        }
+    )
+    return loaded_replay
+
+
+def run_code_reranker_preflight(
+    config: ExperimentConfig,
+    run_data: RunData,
+    first_stage_rankings: Mapping[str, Mapping[str, float]],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load pinned real weights on CPU and score one declared query/candidate pair."""
+
+    if not config.code_reranker_enabled:
+        raise ValueError("enable the code-trained reranker before running its preflight")
+    if not first_stage_rankings:
+        raise ValueError("code-reranker preflight requires a saved E5 ranking")
+    query_id = next(iter(first_stage_rankings))
+    candidate_ids = first_stage_rankings[query_id]
+    if not candidate_ids:
+        raise ValueError("code-reranker preflight requires a non-empty E5 candidate list")
+    document_id = next(iter(candidate_ids))
+    if query_id not in run_data.queries or document_id not in run_data.corpus:
+        raise ValueError("code-reranker preflight pair is outside the declared population")
+    run_id = f"code-reranker-preflight-{time.time_ns()}"
+    environment = environment_metadata(config)
+    with RuntimeCostRecorder() as cost_recorder:
+        with cost_recorder.phase("model_load_code_reranker", "startup"):
+            reranker = CodeCrossEncoderReranker(
+                config,
+                batch_observer=cost_recorder.observe_batch,
+            )
+        try:
+            with cost_recorder.phase("code_reranker_preflight", "online_query"):
+                preflight = reranker.preflight(
+                    run_data.queries[query_id],
+                    run_data.corpus[document_id]["text"],
+                    query_id=query_id,
+                    document_id=document_id,
+                )
+            precision = _module_precision(reranker.model)
+        finally:
+            reranker.close()
+    environment["model_precision"] = {"code_reranker": precision}
+    environment["model_devices"] = {"code_reranker": config.code_reranker_device}
+    costs = cost_recorder.summary(
+        run_id=run_id,
+        cache_identity="preflight",
+        status="preflight",
+        run_mode=config.run_mode,
+        environment=environment,
+        config=config,
+        query_count=1,
+        corpus_count=len(run_data.corpus),
+        reranked_pair_count=1,
+        model_precision={"code_reranker": precision},
+        offline_index_build_seconds=0.0,
+    )
+    costs["evidence_level"] = "preflight"
+    costs["benchmark_evidence"] = False
+    preflight["run_id"] = run_id
+    preflight["parameter_dtype"] = precision
+    preflight["model_load_seconds"] = next(
+        (
+            item["seconds"]
+            for item in costs["phase_timings"]
+            if item["name"] == "model_load_code_reranker"
+        ),
+        None,
+    )
+    preflight["score_seconds"] = next(
+        (
+            item["seconds"]
+            for item in costs["phase_timings"]
+            if item["name"] == "code_reranker_preflight"
+        ),
+        None,
+    )
+    return preflight, costs
+
+
 def rerank_candidate_rankings(
     first_stage_rankings: Mapping[str, Mapping[str, float]],
     query_representations: Mapping[str, str],
@@ -789,7 +1127,7 @@ def _selection_grid() -> list[float]:
 def _selection_controls(config: ExperimentConfig) -> dict[str, Any]:
     """Return controls that affect selection and final evaluation, excluding paths."""
 
-    return {
+    controls = {
         "dataset": {
             "id": config.dataset_id,
             "revision": config.dataset_revision,
@@ -851,6 +1189,17 @@ def _selection_controls(config: ExperimentConfig) -> dict[str, Any]:
             "candidate_depth": config.candidate_depth,
         },
     }
+    if config.code_reranker_enabled:
+        controls["code_reranker"] = {
+            "model_id": config.code_reranker_model_id,
+            "model_revision": config.code_reranker_model_revision,
+            "batch_size": config.code_reranker_batch_size,
+            "max_length": config.code_reranker_max_length,
+            "device": config.code_reranker_device,
+            "input_format": "CrossEncoder.predict([(query_text, corpus_text)])",
+            "score_direction": "higher_score_ranks_first",
+        }
+    return controls
 
 
 def _selection_runtime_fingerprint(environment: Mapping[str, Any]) -> dict[str, Any]:
@@ -931,7 +1280,12 @@ def validate_selection_manifest(
     if not isinstance(manifest, dict):
         raise ValueError("selection manifest must be a JSON object")
     verify_selection_manifest_integrity(manifest)
-    if manifest.get("schema") != "code-retrieval-validation-selection-v2-representation-ablations":
+    expected_schema = (
+        "code-retrieval-validation-selection-v3-code-reranker"
+        if config.code_reranker_enabled
+        else "code-retrieval-validation-selection-v2-representation-ablations"
+    )
+    if manifest.get("schema") != expected_schema:
         raise ValueError("unsupported validation-selection manifest schema")
     if manifest.get("code_version") != CODE_VERSION:
         raise ValueError("selection manifest was produced by a different experiment code version")
@@ -947,6 +1301,8 @@ def validate_selection_manifest(
         "e5_rerank",
         "e5_hyde_rerank",
     }
+    if config.code_reranker_enabled:
+        required_sweeps.add(CODE_RERANKER_SYSTEM_ID)
     if set(manifest.get("sweeps", {})) != required_sweeps:
         raise ValueError("selection manifest is missing a required representation or fusion sweep")
     if manifest.get("baseline_parity", {}).get("passed") is not True:
@@ -955,11 +1311,14 @@ def validate_selection_manifest(
         raise ValueError("frozen selection manifests may only be used for benchmark test evaluation")
     if manifest.get("controls") != _selection_controls(config):
         raise ValueError("selection manifest controls do not match the current experiment configuration")
-    if manifest.get("model_revisions") != {
+    expected_model_revisions = {
         "e5": config.model_revision,
         "hyde": config.hyde_model_revision,
         "reranker": config.reranker_model_revision,
-    }:
+    }
+    if config.code_reranker_enabled:
+        expected_model_revisions["code_reranker"] = config.code_reranker_model_revision
+    if manifest.get("model_revisions") != expected_model_revisions:
         raise ValueError("selection manifest model revisions do not match the current configuration")
     if manifest.get("runtime") != _selection_runtime_fingerprint(environment):
         raise ValueError("selection manifest runtime does not match the current execution environment")
@@ -1109,6 +1468,152 @@ def _baseline_parity(observed: float, reference: float, *, tolerance: float) -> 
         "absolute_difference": abs(float(observed) - float(reference)),
         "tolerance": tolerance,
         "passed": abs(float(observed) - float(reference)) <= tolerance,
+    }
+
+
+def load_validation_ranking_replay(
+    selection_manifest_path: str | Path,
+    run_data: RunData,
+    config: ExperimentConfig,
+) -> dict[str, Any]:
+    """Load the complete saved valid rankings from a sealed prior selection."""
+
+    if config.run_mode != "benchmark" or config.qrels_split != "valid":
+        raise ValueError("valid ranking replay requires benchmark mode and valid qrels")
+    path = Path(selection_manifest_path)
+    if not path.is_file():
+        raise FileNotFoundError(f"valid selection manifest is missing: {path}")
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    verify_selection_manifest_integrity(manifest)
+    if (
+        manifest.get("schema")
+        != "code-retrieval-validation-selection-v2-representation-ablations"
+        or manifest.get("status") != "complete"
+        or manifest.get("selection_qrels_split") != "valid"
+        or manifest.get("target_evaluation_qrels_split") != "test"
+        or manifest.get("baseline_parity", {}).get("passed") is not True
+    ):
+        raise ValueError("valid ranking replay requires a complete sealed selection manifest")
+    if len(run_data.queries) != 500 or len(run_data.qrels) != 500 or len(run_data.corpus) != 20604:
+        raise ValueError("valid ranking replay requires the complete declared CosQA population")
+    population = manifest.get("selection_population", {})
+    if (
+        population.get("queries") != query_population_fingerprint(run_data.queries)
+        or population.get("qrels") != qrels_fingerprint(run_data.qrels)
+        or population.get("corpus") != corpus_fingerprint(run_data.corpus)
+    ):
+        raise ValueError("valid selection manifest does not match the loaded population")
+    controls = manifest.get("controls", {})
+    if (
+        controls.get("dataset", {}).get("id") != config.dataset_id
+        or controls.get("dataset", {}).get("revision") != config.dataset_revision
+        or controls.get("e5", {}).get("model_revision") != config.model_revision
+        or controls.get("hyde", {}).get("model_revision") != config.hyde_model_revision
+        or controls.get("reranker", {}).get("model_revision") != config.reranker_model_revision
+        or controls.get("runtime_controls", {}).get("candidate_depth") != config.candidate_depth
+        or controls.get("runtime_controls", {}).get("rrf_k") != config.rrf_k
+    ):
+        raise ValueError("valid selection manifest has incompatible frozen controls")
+    expected_revisions = {
+        "e5": config.model_revision,
+        "hyde": config.hyde_model_revision,
+        "reranker": config.reranker_model_revision,
+    }
+    if manifest.get("model_revisions") != expected_revisions:
+        raise ValueError("valid selection manifest has incompatible model revisions")
+
+    labels = {
+        "e5_for_hyde",
+        "hyde",
+        "hyde_hypothesis_only",
+        "e5_for_rerank",
+        "reranker",
+    }
+    input_record = manifest.get("ranking_inputs", {})
+    file_records = {
+        item.get("label"): item for item in input_record.get("files", [])
+    }
+    if set(file_records) != labels:
+        raise ValueError("valid selection manifest does not record every required ranking input")
+    rankings: dict[str, dict[str, dict[str, float]]] = {}
+    verified_files: list[dict[str, Any]] = []
+    ranking_content = input_record.get("ranking_content", {})
+    for label in (
+        "e5_for_hyde",
+        "hyde",
+        "hyde_hypothesis_only",
+        "e5_for_rerank",
+        "reranker",
+    ):
+        record = file_records[label]
+        source_path = Path(record.get("path", ""))
+        metadata_path = Path(record.get("metadata_path", ""))
+        if not source_path.is_file() or not metadata_path.is_file():
+            raise FileNotFoundError(f"valid ranking source or metadata is missing for {label}")
+        actual_hash = sha256_file(source_path)
+        metadata_hash = sha256_file(metadata_path)
+        if actual_hash != record.get("sha256") or metadata_hash != record.get("metadata_sha256"):
+            raise ValueError(f"valid ranking source digest does not match the sealed manifest for {label}")
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata_config = metadata.get("config", {})
+        if (
+            metadata_config.get("dataset_id") != config.dataset_id
+            or metadata_config.get("dataset_revision") != config.dataset_revision
+            or metadata_config.get("qrels_split") != "valid"
+            or metadata_config.get("candidate_depth") != config.candidate_depth
+            or metadata_config.get("run_mode") != "benchmark"
+            or metadata_config.get("device") != "cpu"
+            or metadata.get("identity") != input_record.get("cache_identity")
+            or metadata.get("model_revisions") != expected_revisions
+        ):
+            raise ValueError(f"valid ranking metadata controls do not match for {label}")
+        raw = json.loads(source_path.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError(f"valid ranking source {label} must contain an object")
+        _validate_rankings(raw, run_data, label=label, candidate_depth=config.candidate_depth)
+        actual_contract = candidate_contract(raw)
+        expected_content = ranking_content.get(label, {})
+        if (
+            expected_content.get("canonical_sha256") != _rankings_file_sha256(raw)
+            or expected_content.get("candidate_contract") != actual_contract
+        ):
+            raise ValueError(f"valid ranking content does not match the sealed manifest for {label}")
+        rankings[label] = {
+            str(query_id): {str(doc_id): float(score) for doc_id, score in docs.items()}
+            for query_id, docs in raw.items()
+        }
+        verified_files.append(
+            {
+                "label": label,
+                "path": str(source_path),
+                "sha256": actual_hash,
+                "metadata_path": str(metadata_path),
+                "metadata_sha256": metadata_hash,
+                "source_identity": metadata.get("identity"),
+                "source_code_version": metadata.get("code_version"),
+                "source_git_commit": metadata.get("git_commit"),
+                "source_kind": metadata.get("kind"),
+            }
+        )
+    for query_id in run_data.queries:
+        if set(rankings["e5_for_hyde"][query_id]) != set(rankings["e5_for_rerank"][query_id]):
+            raise ValueError(f"valid E5 candidate pools disagree for {query_id}")
+        if set(rankings["e5_for_rerank"][query_id]) != set(rankings["reranker"][query_id]):
+            raise ValueError(f"valid passage reranker changed the E5 candidate pool for {query_id}")
+    return {
+        "rankings": rankings,
+        "revisions": ModelRevisions(**expected_revisions),
+        "source_provenance": {
+            "classification": "retrospective_replay_of_saved_real_model_valid_rankings",
+            "fresh_model_inference": False,
+            "real_model_inference_inputs": True,
+            "synthetic_scores": False,
+            "split": "valid",
+            "selection_manifest_path": str(path),
+            "selection_manifest_sha256": sha256_file(path),
+            "selection_run_id": manifest.get("selection_run_id"),
+            "files": verified_files,
+        },
     }
 
 
@@ -1451,7 +1956,7 @@ def run_validation_selection(
     if "hyde_hypothesis_only" not in rankings:
         raise ValueError(
             "validation selection requires a fresh hypothesis-only ranking; "
-            "historical AZH-527 ranking replay does not contain this representation"
+            "historical ranking replay does not contain this representation"
         )
     if len(run_data.queries) != 500 or len(run_data.qrels) != 500 or len(run_data.corpus) != 20604:
         raise ValueError("validation selection requires the complete declared CosQA population")
@@ -1465,6 +1970,20 @@ def run_validation_selection(
     )
     _validate_rankings(rankings["e5_for_rerank"], run_data, label="E5 for reranking", candidate_depth=config.candidate_depth)
     _validate_rankings(rankings["reranker"], run_data, label="reranker", candidate_depth=config.candidate_depth)
+    if config.code_reranker_enabled:
+        if "code_reranker" not in rankings:
+            raise ValueError("code-reranker selection requires real code-reranker rankings")
+        if revisions.code_reranker != config.code_reranker_model_revision:
+            raise ValueError("resolved code-reranker revision does not match the frozen checkpoint")
+        _validate_rankings(
+            rankings["code_reranker"],
+            run_data,
+            label="code reranker",
+            candidate_depth=config.candidate_depth,
+        )
+        for query_id in run_data.queries:
+            if set(rankings["code_reranker"][query_id]) != set(rankings["e5_for_rerank"][query_id]):
+                raise ValueError(f"code reranker changed the E5 candidate pool for {query_id}")
 
     baseline_metric = evaluate_ndcg_at_10(run_data.qrels, rankings["e5_for_hyde"], cutoff=10)
     baseline_parity = _baseline_parity(
@@ -1500,8 +2019,21 @@ def run_validation_selection(
         rrf_k=config.rrf_k,
         candidate_depth=config.candidate_depth,
     )
+    code_reranker_sweep = None
+    selected_code_reranker = None
+    if config.code_reranker_enabled:
+        code_reranker_sweep, selected_code_reranker = _select_rrf_weights(
+            run_data.qrels,
+            rankings["e5_for_rerank"],
+            rankings["code_reranker"],
+            rrf_k=config.rrf_k,
+            candidate_depth=config.candidate_depth,
+        )
     representation_metrics: dict[str, Mapping[str, Any] | None] = {
         "e5": baseline_metric,
+        "e5_rerank_raw": evaluate_ndcg_at_10(
+            run_data.qrels, rankings["reranker"], cutoff=10
+        ),
         "e5_hyde_raw": evaluate_ndcg_at_10(run_data.qrels, rankings["hyde"], cutoff=10),
         "e5_hypothesis_only_raw": evaluate_ndcg_at_10(
             run_data.qrels, rankings["hyde_hypothesis_only"], cutoff=10
@@ -1511,6 +2043,13 @@ def run_validation_selection(
             run_data.qrels, selected_hypothesis_only, cutoff=10
         ),
     }
+    if config.code_reranker_enabled:
+        representation_metrics["e5_code_rerank_raw"] = evaluate_ndcg_at_10(
+            run_data.qrels, rankings["code_reranker"], cutoff=10
+        )
+        representation_metrics[CODE_RERANKER_SYSTEM_ID] = evaluate_ndcg_at_10(
+            run_data.qrels, selected_code_reranker, cutoff=10
+        )
     ablation_config = replace(
         config,
         hyde_fusion_weights=tuple(hyde_sweep["selected"]["weights"]),
@@ -1534,8 +2073,40 @@ def run_validation_selection(
         _write_ordered_json(path, value)
         fused_paths[name] = path
         fused_hashes[name] = sha256_file(path)
-
+    if config.code_reranker_enabled:
+        path = selection_root / f"{CODE_RERANKER_SYSTEM_ID}_selected_rankings.json"
+        _write_ordered_json(path, selected_code_reranker)
+        fused_paths[CODE_RERANKER_SYSTEM_ID] = path
+        fused_hashes[CODE_RERANKER_SYSTEM_ID] = sha256_file(path)
+    code_raw_rankings_path = None
+    code_raw_rankings_record = None
+    if config.code_reranker_enabled:
+        code_raw_rankings_path = selection_root / "e5_code_reranker_raw_rankings.json"
+        _write_ordered_json(code_raw_rankings_path, rankings["code_reranker"])
+        code_raw_rankings_record = {
+            "path": str(code_raw_rankings_path),
+            "sha256": sha256_file(code_raw_rankings_path),
+            "candidate_contract": candidate_contract(rankings["code_reranker"]),
+            "pair_count": sum(len(values) for values in rankings["code_reranker"].values()),
+        }
+    code_per_query_path = None
     selection_cache_identity = str(ranking_provenance.get("cache_identity") or run_id)
+    if config.code_reranker_enabled:
+        code_per_query_path = selection_root / "code_reranker_per_query_metrics.csv"
+        code_metric_ids = (
+            "e5",
+            "e5_rerank_raw",
+            "e5_code_rerank_raw",
+            CODE_RERANKER_SYSTEM_ID,
+        )
+        _write_records_csv(
+            code_per_query_path,
+            _per_query_metric_rows(
+                {name: representation_metrics[name] for name in code_metric_ids},
+                cache_identity=selection_cache_identity,
+            ),
+        )
+
     representation_ablation_rows = _representation_ablation_rows(
         ablation_config,
         representation_metrics,
@@ -1575,9 +2146,50 @@ def run_validation_selection(
         source_notebook_sha256=source_notebook_sha256,
     )
     status = "complete" if baseline_parity["passed"] else "parity_failed"
+    sweep_records = {
+        "e5_hyde": {
+            "input_order": ["e5_for_hyde", "hyde"],
+            **hyde_sweep,
+        },
+        "e5_hypothesis_only": {
+            "input_order": ["e5_for_hyde", "hyde_hypothesis_only"],
+            **hypothesis_only_sweep,
+        },
+        "e5_rerank": {
+            "input_order": ["e5_for_rerank", "reranker"],
+            **reranker_sweep,
+        },
+        "e5_hyde_rerank": {
+            "input_order": ["selected_e5_hyde", "selected_e5_rerank"],
+            **combined_sweep,
+        },
+    }
+    if config.code_reranker_enabled:
+        sweep_records[CODE_RERANKER_SYSTEM_ID] = {
+            "input_order": ["e5_for_rerank", "code_reranker"],
+            **code_reranker_sweep,
+        }
+    selected_items = [
+        ("e5_hyde", fused_paths["e5_hyde"], selected_hyde),
+        ("e5_hypothesis_only", fused_paths["e5_hypothesis_only"], selected_hypothesis_only),
+        ("e5_rerank", fused_paths["e5_rerank"], selected_reranker),
+        ("e5_hyde_rerank", fused_paths["e5_hyde_rerank"], selected_combined),
+    ]
+    if config.code_reranker_enabled:
+        selected_items.append(
+            (
+                CODE_RERANKER_SYSTEM_ID,
+                fused_paths[CODE_RERANKER_SYSTEM_ID],
+                selected_code_reranker,
+            )
+        )
     manifest = seal_selection_manifest(
         {
-            "schema": "code-retrieval-validation-selection-v2-representation-ablations",
+            "schema": (
+                "code-retrieval-validation-selection-v3-code-reranker"
+                if config.code_reranker_enabled
+                else "code-retrieval-validation-selection-v2-representation-ablations"
+            ),
             "status": status,
             "selection_run_id": run_id,
             "selection_qrels_split": "valid",
@@ -1608,24 +2220,7 @@ def run_validation_selection(
                 "metric": "nDCG@10",
                 "order_policy": RANKING_ORDER_POLICY,
             },
-            "sweeps": {
-                "e5_hyde": {
-                    "input_order": ["e5_for_hyde", "hyde"],
-                    **hyde_sweep,
-                },
-                "e5_hypothesis_only": {
-                    "input_order": ["e5_for_hyde", "hyde_hypothesis_only"],
-                    **hypothesis_only_sweep,
-                },
-                "e5_rerank": {
-                    "input_order": ["e5_for_rerank", "reranker"],
-                    **reranker_sweep,
-                },
-                "e5_hyde_rerank": {
-                    "input_order": ["selected_e5_hyde", "selected_e5_rerank"],
-                    **combined_sweep,
-                },
-            },
+            "sweeps": sweep_records,
             "baseline_parity": baseline_parity,
             "baseline_metric": {
                 "system_id": "e5",
@@ -1648,17 +2243,33 @@ def run_validation_selection(
                     "sha256": fused_hashes[name],
                     "candidate_contract": candidate_contract(value),
                 }
-                for name, path, value in (
-                    ("e5_hyde", fused_paths["e5_hyde"], selected_hyde),
-                    (
-                        "e5_hypothesis_only",
-                        fused_paths["e5_hypothesis_only"],
-                        selected_hypothesis_only,
-                    ),
-                    ("e5_rerank", fused_paths["e5_rerank"], selected_reranker),
-                    ("e5_hyde_rerank", fused_paths["e5_hyde_rerank"], selected_combined),
-                )
+                for name, path, value in selected_items
             },
+            "code_reranker": (
+                {
+                    "model_id": config.code_reranker_model_id,
+                    "configured_revision": config.code_reranker_model_revision,
+                    "resolved_revision": revisions.code_reranker,
+                    "batch_size": config.code_reranker_batch_size,
+                    "max_length": config.code_reranker_max_length,
+                    "device": config.code_reranker_device,
+                    "preflight": ranking_provenance.get("code_reranker_preflight"),
+                    "training_context": _code_reranker_training_context(),
+                    "raw_rankings": code_raw_rankings_record,
+            "per_query_metrics": (
+                {
+                    "path": str(code_per_query_path),
+                    "sha256": sha256_file(code_per_query_path),
+                    "row_count": 4 * len(run_data.queries),
+                    "paired_query_count": len(run_data.queries),
+                }
+                if code_per_query_path is not None
+                else None
+            ),
+                }
+                if config.code_reranker_enabled
+                else None
+            ),
             "representation_ablation_artifacts": representation_ablation_artifacts,
             "evidence_boundary": {
                 "test_qrels_loaded": False,
@@ -1678,7 +2289,7 @@ def run_validation_selection(
         "run_id": run_id,
         "cache_identity": selection_cache_identity,
         "run_mode": config.run_mode,
-        "system_ids": list(SYSTEM_IDS),
+        "system_ids": experiment_system_ids(config),
         "code_version": CODE_VERSION,
         "git_commit": git_commit(repo_root),
         "config": config.as_dict(),
@@ -1709,6 +2320,15 @@ def run_validation_selection(
         "ranking_inputs": dict(ranking_provenance),
         "evidence_boundary": manifest["evidence_boundary"],
     }
+    if config.code_reranker_enabled:
+        result["code_reranker"] = manifest["code_reranker"]
+        result["raw_code_reranker_metrics"] = dict(
+            representation_metrics["e5_code_rerank_raw"]
+        )
+        result["code_reranker_metrics"] = dict(
+            representation_metrics[CODE_RERANKER_SYSTEM_ID]
+        )
+        result["reranked_candidate_pair_count"] = code_raw_rankings_record["pair_count"]
     result_path = selection_root / "selection_result.json"
     _write_ordered_json(result_path, result)
     selection_metadata_path = selection_root / "selection_metadata.json"
@@ -1733,6 +2353,12 @@ def run_validation_selection(
         "representation_ablation": str(representation_ablation_path),
         "representation_ablation_per_query": str(representation_ablation_per_query_path),
     }
+    if config.code_reranker_enabled:
+        paths["e5_code_rerank_selected_rankings"] = str(
+            fused_paths[CODE_RERANKER_SYSTEM_ID]
+        )
+        paths["e5_code_rerank_raw_rankings"] = str(code_raw_rankings_path)
+        paths["code_reranker_per_query_metrics"] = str(code_per_query_path)
     return result, paths
 
 
@@ -1757,7 +2383,7 @@ def run_replayed_test_evaluation(
     if "hyde_hypothesis_only" not in rankings:
         raise ValueError(
             "test ranking replay requires a hypothesis-only HyDE ranking; "
-            "historical AZH-527 artifacts cannot satisfy the representation ablation"
+            "historical rankings cannot satisfy the representation ablation"
         )
     config = replace(
         config,
@@ -1766,6 +2392,11 @@ def run_replayed_test_evaluation(
             selected["e5_hypothesis_only"]["selected"]["weights"]
         ),
         reranker_fusion_weights=tuple(selected["e5_rerank"]["selected"]["weights"]),
+        code_reranker_fusion_weights=(
+            tuple(selected[CODE_RERANKER_SYSTEM_ID]["selected"]["weights"])
+            if config.code_reranker_enabled
+            else config.code_reranker_fusion_weights
+        ),
         combined_fusion_weights=tuple(selected["e5_hyde_rerank"]["selected"]["weights"]),
     )
     e5_rankings = rankings["e5_for_hyde"]
@@ -1797,6 +2428,21 @@ def run_replayed_test_evaluation(
         top_k=config.candidate_depth,
         rrf_k=config.rrf_k,
     )
+    fused_code_reranker = None
+    if config.code_reranker_enabled:
+        if "code_reranker" not in rankings:
+            raise ValueError("test evaluation requires the fresh code-reranker ranking")
+        if revisions.code_reranker != config.code_reranker_model_revision:
+            raise ValueError("test ranking revision does not match the pinned code checkpoint")
+        for query_id in run_data.queries:
+            if set(rankings["code_reranker"][query_id]) != set(e5_rerank_rankings[query_id]):
+                raise ValueError(f"test code reranker changed the E5 candidate pool for {query_id}")
+        fused_code_reranker = reciprocal_rank_fusion(
+            [e5_rerank_rankings, rankings["code_reranker"]],
+            weights=config.code_reranker_fusion_weights,
+            top_k=config.candidate_depth,
+            rrf_k=config.rrf_k,
+        )
     evaluation_started = time.perf_counter()
     metrics: dict[str, Mapping[str, Any]] = {
         "e5": evaluate_ndcg_at_10(run_data.qrels, e5_rankings, cutoff=10),
@@ -1812,6 +2458,13 @@ def run_replayed_test_evaluation(
         ),
         "e5_rerank_raw": evaluate_ndcg_at_10(run_data.qrels, reranker_rankings, cutoff=10),
     }
+    if config.code_reranker_enabled:
+        metrics["e5_code_rerank_raw"] = evaluate_ndcg_at_10(
+            run_data.qrels, rankings["code_reranker"], cutoff=10
+        )
+        metrics[CODE_RERANKER_SYSTEM_ID] = evaluate_ndcg_at_10(
+            run_data.qrels, fused_code_reranker, cutoff=10
+        )
     evaluation_seconds = time.perf_counter() - evaluation_started
     identity = experiment_identity(
         config,
@@ -1828,12 +2481,26 @@ def run_replayed_test_evaluation(
         identity=identity,
         revisions=revisions,
         environment=environment,
-        timings={"cached_ranking_evaluation": evaluation_seconds},
+        timings={
+            "cached_ranking_evaluation": evaluation_seconds,
+            **(
+                {
+                    "code_reranker_preflight": ranking_replay["source_provenance"]
+                    .get("code_reranker", {})
+                    .get("preflight_seconds"),
+                    "code_reranker_scoring": ranking_replay["source_provenance"]
+                    .get("code_reranker", {})
+                    .get("scoring_seconds"),
+                }
+                if config.code_reranker_enabled
+                else {}
+            ),
+        },
         notebook_sha256=notebook_sha256,
         source_notebook_sha256=source_notebook_sha256,
         repo_root=repo_root,
-        status="cache_replay",
-        real_model_inference=False,
+        status="benchmark" if config.code_reranker_enabled else "cache_replay",
+        real_model_inference=config.code_reranker_enabled,
     )
     result["hyde_generation_provenance"] = dict(
         ranking_replay["source_provenance"].get("hyde_generation_provenance", {})
@@ -1851,6 +2518,15 @@ def run_replayed_test_evaluation(
         "e5_rerank": {**candidate_contract(fused_reranker), "pool_policy": "same_candidate_ids_as_e5"},
         "e5_hyde_rerank": {**candidate_contract(fused_combined), "pool_policy": "union_of_selected_component_rankings_truncated_to_candidate_depth"},
     }
+    if config.code_reranker_enabled:
+        result["candidate_contract"]["e5_code_rerank_raw"] = {
+            **candidate_contract(rankings["code_reranker"]),
+            "pool_policy": "same_candidate_ids_as_e5",
+        }
+        result["candidate_contract"][CODE_RERANKER_SYSTEM_ID] = {
+            **candidate_contract(fused_code_reranker),
+            "pool_policy": "same_candidate_ids_as_e5",
+        }
     result["selection_manifest"] = {
         "path": str(selection_manifest.get("_path", "")),
         "manifest_sha256": selection_manifest["manifest_sha256"],
@@ -1862,6 +2538,7 @@ def run_replayed_test_evaluation(
                 "e5_hypothesis_only",
                 "e5_rerank",
                 "e5_hyde_rerank",
+                *([CODE_RERANKER_SYSTEM_ID] if config.code_reranker_enabled else []),
             )
         },
     }
@@ -1878,13 +2555,40 @@ def run_replayed_test_evaluation(
     )
     result["ranking_replay"] = dict(ranking_replay["source_provenance"])
     result["artifact_provenance"]["ranking_replay"] = dict(ranking_replay["source_provenance"])
-    result["benchmark_evidence"] = False
+    result["benchmark_evidence"] = config.code_reranker_enabled is True
     result["limitations"].append(
         {
             "type": "evidence_level",
-            "reason": "Metrics were recomputed from saved real-model rankings; this run performed no fresh model inference and is retrospective cache-replay evidence.",
+            "reason": (
+                "The full code-reranker test ranking was scored with fresh real pinned weights; "
+                "the E5, HyDE, and passage-reranker comparison inputs were replayed from the "
+                "recorded complete historical benchmark. Test results remain retrospective and exploratory."
+                if config.code_reranker_enabled
+                else "Metrics were recomputed from saved real-model rankings; this run performed no fresh model inference and is retrospective cache-replay evidence."
+            ),
         }
     )
+    if config.code_reranker_enabled:
+        code_evidence = dict(ranking_replay["source_provenance"].get("code_reranker", {}))
+        code_evidence.update(result["code_reranker"])
+        code_evidence["preflight"] = ranking_replay.get("code_reranker_preflight")
+        raw_path = Path(config.artifact_dir) / "runs" / result["run_id"] / "e5_code_reranker_raw_rankings.json"
+        _write_ordered_json(raw_path, rankings["code_reranker"])
+        code_evidence.update(
+            {
+                "raw_rankings": {
+                    "path": str(raw_path),
+                    "sha256": sha256_file(raw_path),
+                    "candidate_contract": candidate_contract(rankings["code_reranker"]),
+                },
+                "metrics": {
+                    "raw": dict(metrics["e5_code_rerank_raw"]),
+                    "validation_selected_fusion": dict(metrics[CODE_RERANKER_SYSTEM_ID]),
+                },
+            }
+        )
+        result["code_reranker"] = code_evidence
+        result["reranked_candidate_pair_count"] = code_evidence.get("pair_count", 0)
     artifacts = write_comparison_artifacts(
         config,
         result,
@@ -1994,6 +2698,7 @@ def _result_rows(
     candidate_depth: int,
     evaluator_package: str,
     status: str,
+    system_ids: Sequence[str] | None = None,
 ) -> list[dict[str, Any]]:
     baseline_metric = metrics.get("e5")
     metric_names = (
@@ -2008,7 +2713,7 @@ def _result_rows(
         for name in metric_names
     }
     rows: list[dict[str, Any]] = []
-    for system_id in SYSTEM_IDS:
+    for system_id in system_ids or SYSTEM_IDS:
         metric = metrics.get(system_id)
         row: dict[str, Any] = {"system_id": system_id}
         for metric_name in metric_names:
@@ -2190,8 +2895,9 @@ def build_comparison_result(
         status = "smoke" if config.run_mode == "smoke" else "benchmark"
     if status not in {"smoke", "benchmark", "cache_replay", "blocked"}:
         raise ValueError("status must be smoke, benchmark, cache_replay, or blocked")
-    if status == "benchmark" and any(metrics.get(system_id) is None for system_id in SYSTEM_IDS):
-        raise ValueError("benchmark results require all four evaluated systems")
+    system_ids = experiment_system_ids(config)
+    if status == "benchmark" and any(metrics.get(system_id) is None for system_id in system_ids):
+        raise ValueError("benchmark results require every configured primary system")
     rows = _result_rows(
         metrics,
         query_count=len(run_data.queries),
@@ -2201,6 +2907,7 @@ def build_comparison_result(
         candidate_depth=config.candidate_depth,
         evaluator_package=config.evaluator_package,
         status=status,
+        system_ids=system_ids,
     )
     exclusions = list(run_data.exclusions)
     limitations: list[dict[str, str]] = []
@@ -2229,8 +2936,8 @@ def build_comparison_result(
         qrels_judgment_count=sum(len(rels) for rels in run_data.qrels.values()),
         status=status,
     )
-    return {
-        "system_ids": list(SYSTEM_IDS),
+    result = {
+        "system_ids": system_ids,
         "metric": "nDCG@10",
         "reported_metrics": ["nDCG@10", "MAP@10", "Recall@10", "Recall@1000"],
         "metric_notes": {
@@ -2351,6 +3058,7 @@ def build_comparison_result(
                 "e5_hyde_raw",
                 "e5_hypothesis_only_raw",
                 "e5_rerank_raw",
+                "e5_code_rerank_raw",
             )
             if metrics.get(system_id) is not None
         },
@@ -2380,6 +3088,27 @@ def build_comparison_result(
             "synthetic_scores": False,
         },
     }
+    if config.code_reranker_enabled:
+        result["code_reranker"] = {
+            "model_id": config.code_reranker_model_id,
+            "configured_revision": config.code_reranker_model_revision,
+            "resolved_revision": revisions.code_reranker,
+            "batch_size": config.code_reranker_batch_size,
+            "max_length": config.code_reranker_max_length,
+            "device": config.code_reranker_device,
+            "input_format": "CrossEncoder.predict([(query_text, corpus_text)])",
+            "score_direction": "higher_score_ranks_first",
+            "fusion_weights": list(config.code_reranker_fusion_weights),
+            "training_context": _code_reranker_training_context(),
+        }
+        result["fusion"]["component_weights"][CODE_RERANKER_SYSTEM_ID] = list(
+            config.code_reranker_fusion_weights
+        )
+        result["fusion"]["sources"][CODE_RERANKER_SYSTEM_ID] = [
+            "e5_original_query",
+            "e5_code_cross_encoder_order",
+        ]
+    return result
 
 
 def blocked_result(
@@ -2405,7 +3134,7 @@ def blocked_result(
         config,
         empty_data,
         empty_run,
-        {system_id: None for system_id in SYSTEM_IDS},
+        {system_id: None for system_id in experiment_system_ids(config)},
         identity="blocked",
         revisions=revisions,
         environment=dict(environment or {}),
@@ -2670,22 +3399,49 @@ def _run_experiment(
 
     if selection_manifest is not None:
         test_boundary = validate_test_population_boundary(selection_manifest, run_data)
+    if config.code_reranker_enabled and ranking_replay is None:
+        raise ValueError(
+            "the code reranker requires provenance-validated saved E5 candidate rankings"
+        )
     if ranking_replay is not None:
         if config.run_mode != "benchmark":
             raise ValueError("ranking replay is available only for complete benchmark populations")
         if ranking_replay.get("split") != config.qrels_split:
             raise ValueError("ranking replay split does not match the configured qrels split")
-        loaded_replay = load_ranking_replay(
-            ranking_replay["sources"],
-            run_data,
-            config,
-            split=config.qrels_split,
-            selection_reference_path=ranking_replay.get("selection_reference_path"),
-            validation_reference_path=ranking_replay.get("validation_reference_path"),
-            test_result_path=ranking_replay.get("test_result_path"),
-        )
+        if config.code_reranker_enabled and config.qrels_split == "valid":
+            if not ranking_replay.get("selection_reference_path"):
+                raise ValueError("valid code-reranker replay requires its sealed source manifest")
+            loaded_replay = load_validation_ranking_replay(
+                ranking_replay["selection_reference_path"],
+                run_data,
+                config,
+            )
+        else:
+            loaded_replay = load_ranking_replay(
+                ranking_replay["sources"],
+                run_data,
+                config,
+                split=config.qrels_split,
+                selection_reference_path=ranking_replay.get("selection_reference_path"),
+                validation_reference_path=ranking_replay.get("validation_reference_path"),
+                test_result_path=ranking_replay.get("test_result_path"),
+            )
+        if config.code_reranker_enabled:
+            loaded_replay = add_code_reranker_rankings(
+                loaded_replay,
+                config,
+                run_data,
+                cost_recorder=cost_recorder,
+            )
         replay_environment = dict(pre_model_environment)
         replay_environment["model_revisions"] = loaded_replay["revisions"].as_dict()
+        if config.code_reranker_enabled:
+            replay_environment.setdefault("model_precision", {})["code_reranker"] = (
+                loaded_replay["code_reranker_preflight"].get("parameter_dtype")
+            )
+            replay_environment.setdefault("model_devices", {})["code_reranker"] = (
+                config.code_reranker_device
+            )
         replay_provenance = loaded_replay["source_provenance"]
         if config.qrels_split == "valid":
             return run_validation_selection(
@@ -3361,11 +4117,37 @@ def _write_runtime_cost_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> No
     temporary.replace(path)
 
 
+def _runtime_costs_with_effective_fusion_weights(
+    result: Mapping[str, Any], costs: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Record the validation-selected weights actually used by this result."""
+
+    updated = dict(costs)
+    controls = dict(costs.get("measurement_controls", {}))
+    settings = dict(controls.get("experiment_settings", {}))
+    component_weights = result.get("fusion", {}).get("component_weights", {})
+    setting_by_system = {
+        "e5_hyde": "hyde_fusion_weights",
+        "e5_hypothesis_only": "hypothesis_only_fusion_weights",
+        "e5_rerank": "reranker_fusion_weights",
+        "e5_hyde_rerank": "combined_fusion_weights",
+        "e5_code_rerank": "code_reranker_fusion_weights",
+    }
+    for system_id, setting_name in setting_by_system.items():
+        if system_id in component_weights:
+            settings[setting_name] = list(component_weights[system_id])
+    if settings:
+        controls["experiment_settings"] = settings
+        updated["measurement_controls"] = controls
+    return updated
+
+
 def _persist_runtime_costs(
     result: dict[str, Any],
     artifacts: dict[str, str],
     costs: Mapping[str, Any],
 ) -> dict[str, str]:
+    effective_costs = _runtime_costs_with_effective_fusion_weights(result, costs)
     result_path = artifacts.get("run_result") or artifacts.get("result") or artifacts.get(
         "selection_result"
     )
@@ -3374,11 +4156,11 @@ def _persist_runtime_costs(
     run_dir.mkdir(parents=True, exist_ok=True)
     cost_json_path = run_dir / "runtime_costs.json"
     cost_csv_path = run_dir / "runtime_costs.csv"
-    _json_write(cost_json_path, dict(costs))
-    cost_rows = _runtime_cost_csv_rows(costs)
+    _json_write(cost_json_path, effective_costs)
+    cost_rows = _runtime_cost_csv_rows(effective_costs)
     _write_runtime_cost_csv(cost_csv_path, cost_rows)
 
-    result["runtime_costs"] = dict(costs)
+    result["runtime_costs"] = effective_costs
     result["cost_observations"] = {
         "local_model_inference": any(
             item["stage"]
@@ -3390,9 +4172,9 @@ def _persist_runtime_costs(
                 "hyde_generation",
                 "cross_encoder_scoring",
             }
-            for item in costs["batch_observations"]
+            for item in effective_costs["batch_observations"]
         ),
-        "gpu_memory_captured": costs["memory"]["gpu_peak_allocated_bytes"] is not None,
+        "gpu_memory_captured": effective_costs["memory"]["gpu_peak_allocated_bytes"] is not None,
         "latency_is_wall_clock_seconds": True,
         "runtime_costs_json": str(cost_json_path),
         "runtime_costs_csv": str(cost_csv_path),
@@ -3469,6 +4251,8 @@ def run_experiment(
 
 __all__ = [
     "CODE_VERSION",
+    "CODE_RERANKER_MODEL_ID",
+    "CODE_RERANKER_MODEL_REVISION",
     "DEFAULT_HYDE_PROMPT",
     "DEFAULT_RRF_K",
     "ExperimentConfig",
@@ -3482,8 +4266,11 @@ __all__ = [
     "candidate_contract",
     "combine_hypotheses",
     "experiment_identity",
+    "experiment_system_ids",
     "load_ranking_replay",
+    "load_validation_ranking_replay",
     "load_cosqa",
+    "run_code_reranker_preflight",
     "run_experiment",
     "run_validation_selection",
     "rerank_candidate_rankings",
