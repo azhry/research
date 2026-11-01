@@ -16,10 +16,16 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from aste_repro.report import _parsed_hoasa_rows, _verify_reference_artifacts, build_report
+from aste_repro.report import (
+    _parsed_hoasa_rows,
+    _verify_isolated_reference_attempt,
+    _verify_reference_artifacts,
+    build_report,
+)
 
 
 PROTOCOL_ID = "pyabsa-2.4.3-emcgcn-reference-max-test-v2-seed-cache-compatible"
+CACHE_PROCESS_PROTOCOL_ID = "pyabsa-2.4.3-emcgcn-reference-max-test-v3-fresh-seed-process-cache-hit"
 ENCODER_ORDER = ("mbert", "indobert", "xlmr", "deberta_absa")
 ROOT = Path(__file__).resolve().parents[2]
 RUNS = ROOT / "runs"
@@ -879,6 +885,527 @@ def run_missing_reference_baselines(
             completed_at=_now(),
             failure_type="KeyboardInterrupt",
             failure="notebook queue interrupted; partial run files and checkpoints are preserved",
+        )
+        raise
+
+
+def run_cache_process_reference_baselines(
+    *,
+    project: Path,
+    repo_root: Path,
+    runs_dir: Path,
+    report_path: Path,
+    matrix_path: Path,
+    encoders: tuple[str, ...] | list[str] | None = None,
+) -> dict[str, Any]:
+    """Reproduce cache-affected source cells with one fresh process per declared seed."""
+    project = project.resolve()
+    repo_root = repo_root.resolve()
+    runs_dir = runs_dir.resolve()
+    report_path = report_path.resolve()
+    matrix_path = matrix_path.resolve()
+    matrix = json.loads(matrix_path.read_text(encoding="utf-8"))
+    source_protocol = matrix.get("reference_baseline_protocol", {})
+    protocol = matrix.get("reference_baseline_cache_process_protocol", {})
+    if source_protocol.get("id") != PROTOCOL_ID or protocol.get("id") != CACHE_PROCESS_PROTOCOL_ID:
+        raise RuntimeError("matrix does not declare the cache-process reference protocol")
+    declared_seeds = [int(value) for value in protocol.get("seeds", [])]
+    if declared_seeds != [1, 2, 3]:
+        raise RuntimeError("cache-process protocol seed declaration changed")
+    if protocol.get("reuse_cache_for") != declared_seeds or protocol.get("cache_hit_required") is not True:
+        raise RuntimeError("cache-process protocol must require the pinned cache for every declared seed")
+    configured_encoders = tuple(protocol.get("encoders", []))
+    selected_encoders = tuple(configured_encoders if encoders is None else encoders)
+    if not selected_encoders or len(set(selected_encoders)) != len(selected_encoders):
+        raise ValueError("encoder selection must be non-empty and contain no duplicates")
+    if not set(selected_encoders).issubset(configured_encoders):
+        raise ValueError(f"encoder selection is outside the predeclared cache-affected scope: {selected_encoders!r}")
+    cache_source_runs = protocol.get("cache_source_runs", {})
+    if set(selected_encoders) - set(cache_source_runs):
+        raise RuntimeError("matrix must pin one completed v2 cache-source attempt per cache-affected encoder")
+
+    reference_repo = Path(os.environ.get("PYABSA_REFERENCE_REPO", source_protocol["source_repository"])).resolve()
+    python_exe = Path(
+        os.environ.get("PYABSA_PYTHON", str(reference_repo / ".venv" / "Scripts" / "python.exe"))
+    ).resolve()
+    runner = project / "src" / "aste_repro" / "reference_baseline.py"
+    if not reference_repo.is_dir():
+        raise FileNotFoundError(f"local PyABSA reference repository is unavailable: {reference_repo}")
+    if not python_exe.is_file():
+        raise FileNotFoundError(f"source PyABSA Python runtime is unavailable: {python_exe}")
+    if not runner.is_file():
+        raise FileNotFoundError(f"integrated source-script runner is missing: {runner}")
+
+    marker = runs_dir / QUEUE_NAME
+    _assert_no_active_queue(os.getpid())
+    previous_queue = _recover_old_reference_queue(marker, runs_dir)
+    # Keep the finished v2 queue record byte-for-byte before v3 takes the active marker.
+    if marker.is_file():
+        old_marker = _read_json(marker)
+        archive = runs_dir / "hoasa-emcgcn-reference-baseline-queue-v2-complete.status.json"
+        if old_marker.get("experiment_protocol_id") == PROTOCOL_ID and old_marker.get("status") == "complete":
+            if archive.exists():
+                if archive.read_bytes() != marker.read_bytes():
+                    raise FileExistsError(f"v2 queue archive already exists with different content: {archive}")
+            else:
+                shutil.copy2(marker, archive)
+
+    # Recover only v3 root attempts whose recorded source worker has been proved stale.
+    for manifest_path, manifest in _reference_manifests(runs_dir, CACHE_PROCESS_PROTOCOL_ID):
+        if manifest.get("status") != "running":
+            continue
+        worker_live, worker_process = _process_matches(
+            manifest.get("runner_pid"), WORKER_TOKEN, manifest.get("worker_started_at") or manifest.get("created_at")
+        )
+        if worker_live:
+            raise RuntimeError(
+                f"cache-process source worker is still live (PID {manifest.get('runner_pid')}); do not duplicate it"
+            )
+        manifest = _interrupt_stale_attempt(
+            manifest_path,
+            _read_json(marker) if marker.is_file() else {},
+            "Recovered a stale cache-process attempt after confirming its source worker no longer exists; partial child artifacts were preserved.",
+        )
+        manifest["interruption_evidence"] = manifest.get("interruption_evidence", {})
+        manifest["interruption_evidence"]["runner_process"] = _process_evidence(worker_process, WORKER_TOKEN)
+        for child_manifest_path in sorted(manifest_path.parent.glob("seed-*/manifest.json")):
+            child_manifest = _read_json(child_manifest_path)
+            if child_manifest.get("status") == "running":
+                _interrupt_stale_attempt(
+                    child_manifest_path,
+                    _read_json(marker) if marker.is_file() else {},
+                    "The enclosing notebook queue stopped after this source process exited; child logs and partial artifacts were preserved.",
+                )
+        manifest["artifact_sha256"] = {
+            path.relative_to(manifest_path.parent).as_posix(): _sha256(path)
+            for path in sorted(manifest_path.parent.rglob("*"))
+            if path.is_file() and path != manifest_path
+        }
+        _atomic_manifest(manifest_path, manifest)
+
+    _refresh_report(report_path, matrix_path, runs_dir)
+    cache_sources: dict[str, dict[str, Any]] = {}
+    for encoder in selected_encoders:
+        source_run_id = str(cache_source_runs[encoder])
+        source_manifest_path = runs_dir / source_run_id / "manifest.json"
+        if not source_manifest_path.is_file():
+            raise FileNotFoundError(f"pinned cache-source run is missing for {encoder}: {source_run_id}")
+        source_manifest = _read_json(source_manifest_path)
+        if (
+            source_manifest.get("status") != "complete"
+            or source_manifest.get("experiment_protocol_id") != PROTOCOL_ID
+            or source_manifest.get("encoder") != encoder
+        ):
+            raise RuntimeError(f"pinned cache-source run is not a complete v2 run for {encoder}: {source_run_id}")
+        _verify_reference_artifacts(
+            {"path": source_manifest_path, "manifest": source_manifest}, source_protocol
+        )
+        source_log = source_manifest_path.parent / str(source_manifest["reference"]["runner_log"])
+        save_events = re.findall(
+            r"Save cache dataset to ([^\r\n]+\.cache)",
+            source_log.read_text(encoding="utf-8", errors="replace"),
+        )
+        if not save_events:
+            raise RuntimeError(f"pinned v2 source run did not create a reusable dataset cache: {source_run_id}")
+        cache_name = Path(save_events[0].strip()).name
+        cache_path = source_manifest_path.parent / cache_name
+        expected_hash = source_manifest.get("artifact_sha256", {}).get(cache_name)
+        if not cache_path.is_file() or not expected_hash or _sha256(cache_path) != expected_hash:
+            raise RuntimeError(f"pinned v2 cache artifact is absent or checksum-invalid: {cache_path}")
+        cache_sources[encoder] = {
+            "run_id": source_run_id,
+            "relative_path": cache_name,
+            "sha256": expected_hash,
+            "path": cache_path,
+        }
+    started_at = _now()
+    scope = (
+        f"{CACHE_PROCESS_PROTOCOL_ID}: cache-affected unchanged source scripts; "
+        f"one fresh process for each seed {declared_seeds} across {list(selected_encoders)}"
+    )
+    failures: list[dict[str, Any]] = []
+    completed_encoders: list[str] = []
+    skipped_encoders: list[str] = []
+    current: dict[str, Any] = {
+        "current_encoder": None,
+        "current_seed": None,
+        "worker_pid": None,
+        "worker_started_at": None,
+    }
+
+    def write(status: str, **extra: Any) -> dict[str, Any]:
+        return _write_reference_queue(
+            marker,
+            status,
+            os.getpid(),
+            started_at,
+            scope,
+            recovered_queue=previous_queue,
+            completed_encoders=list(completed_encoders),
+            skipped_encoders=list(skipped_encoders),
+            failures=list(failures),
+            experiment_protocol_id=CACHE_PROCESS_PROTOCOL_ID,
+            expected_scripts=len(selected_encoders),
+            expected_seed_outcomes=len(selected_encoders) * len(declared_seeds),
+            selected_encoders=list(selected_encoders),
+            **{**current, **extra},
+        )
+
+    def write_parent(run_dir: Path, manifest: dict[str, Any]) -> dict[str, Any]:
+        manifest_path = run_dir / "manifest.json"
+        manifest["artifact_sha256"] = {
+            path.relative_to(run_dir).as_posix(): _sha256(path)
+            for path in sorted(run_dir.rglob("*"))
+            if path.is_file() and path != manifest_path
+        }
+        _atomic_json(manifest_path, manifest)
+        return manifest
+
+    def write_metrics(run_dir: Path, seed_metrics: list[dict[str, Any]]) -> None:
+        _atomic_json(
+            run_dir / "reference_metrics.json",
+            {
+                "run_id": run_dir.name,
+                "metric": "PyABSA MetricVisualizer Max-Test-F1",
+                "unit": "percent",
+                "selection_boundary": "test set used during training for checkpoint selection; test-leaked reference only",
+                "execution_protocol_id": CACHE_PROCESS_PROTOCOL_ID,
+                "seeds": seed_metrics,
+            },
+        )
+
+    def verify_seed_child(child_manifest_path: Path, encoder: str, seed: int) -> dict[str, Any] | None:
+        if not child_manifest_path.is_file():
+            return None
+        child_manifest = _read_json(child_manifest_path)
+        if child_manifest.get("status") != "complete":
+            return None
+        child_protocol = {**source_protocol, "id": CACHE_PROCESS_PROTOCOL_ID, "seeds": [seed]}
+        verified = _verify_reference_artifacts(
+            {"path": child_manifest_path, "manifest": child_manifest}, child_protocol
+        )
+        if len(verified) != 1 or int(verified[0]["seed"]) != seed:
+            raise RuntimeError(f"verified child run does not match {encoder} seed {seed}")
+        cache_record = child_manifest.get("reference", {}).get("dataset_cache_evidence", {})
+        if cache_record.get("cache_hit_required") is not True:
+            raise RuntimeError(f"{encoder} seed {seed} did not load its pinned shared dataset cache")
+        return verified[0]
+
+    write("running", phase="starting")
+    try:
+        for encoder in selected_encoders:
+            attempts = _reference_manifests(runs_dir, CACHE_PROCESS_PROTOCOL_ID, encoder)
+            complete = [(path, record) for path, record in attempts if record.get("status") == "complete"]
+            if len(complete) > 1:
+                raise RuntimeError(f"multiple complete cache-process attempts exist for {encoder}; refusing to pool")
+            if complete:
+                _verify_isolated_reference_attempt(
+                    {"path": complete[0][0], "manifest": complete[0][1]}, source_protocol, protocol
+                )
+                skipped_encoders.append(encoder)
+                current.update({"current_encoder": encoder, "current_seed": None, "worker_pid": None, "worker_started_at": None})
+                write("running", phase="skipping_verified_complete")
+                print(f"Already complete and checksum-verified under the cache-process protocol; skipping {encoder}.", flush=True)
+                continue
+
+            resumable = [
+                (path, record)
+                for path, record in attempts
+                if record.get("status") in {"interrupted", "complete_with_failures", "failed"}
+            ]
+            if len(resumable) > 1:
+                raise RuntimeError(f"multiple incomplete cache-process attempts exist for {encoder}; refusing to choose between them")
+
+            for manifest_path, old_manifest in attempts:
+                if old_manifest.get("status") == "running":
+                    live, _process = _process_matches(
+                        old_manifest.get("runner_pid"), WORKER_TOKEN,
+                        old_manifest.get("worker_started_at") or old_manifest.get("created_at"),
+                    )
+                    if live:
+                        raise RuntimeError(f"cache-process worker is active for {old_manifest.get('run_id')}; refusing a duplicate")
+                    _interrupt_stale_attempt(
+                        manifest_path,
+                        _read_json(marker),
+                        "Resumed after a prior cache-process queue stopped; its partial seed artifacts are preserved.",
+                    )
+
+            source_spec = source_protocol["source_scripts"][encoder]
+            if resumable:
+                parent_manifest_path, parent_manifest = resumable[0]
+                run_dir = parent_manifest_path.parent
+                _verify_isolated_reference_attempt(
+                    {"path": parent_manifest_path, "manifest": parent_manifest}, source_protocol, protocol
+                )
+                valid_seed_runs: dict[str, str] = {}
+                for seed in declared_seeds:
+                    relative = parent_manifest.get("seed_runs", {}).get(str(seed))
+                    if relative and verify_seed_child(run_dir / relative, encoder, seed) is not None:
+                        valid_seed_runs[str(seed)] = relative
+                # Adopt a child that finished just before the queue process was interrupted.
+                for seed in declared_seeds:
+                    if str(seed) in valid_seed_runs:
+                        continue
+                    candidates = sorted(
+                        path / "manifest.json"
+                        for path in run_dir.iterdir()
+                        if path.is_dir()
+                        and (path.name == f"seed-{seed}" or path.name.startswith(f"seed-{seed}-attempt-"))
+                    )
+                    complete_children = [
+                        path for path in candidates
+                        if verify_seed_child(path, encoder, seed) is not None
+                    ]
+                    if len(complete_children) > 1:
+                        raise RuntimeError(f"multiple completed child runs exist for {encoder} seed {seed}; refusing to pool")
+                    if complete_children:
+                        valid_seed_runs[str(seed)] = complete_children[0].relative_to(run_dir).as_posix()
+                parent_manifest["seed_runs"] = valid_seed_runs
+                parent_manifest["seed_metrics"] = [
+                    verify_seed_child(run_dir / valid_seed_runs[str(seed)], encoder, seed)
+                    for seed in declared_seeds
+                    if str(seed) in valid_seed_runs
+                ]
+                prior_failures = parent_manifest.get("failures", [])
+                if prior_failures:
+                    parent_manifest.setdefault("seed_attempt_history", []).append(
+                        {"recorded_at": _now(), "prior_failures": prior_failures}
+                    )
+                parent_manifest["failures"] = []
+                parent_manifest["status"] = "running"
+                parent_manifest["completed_at"] = None
+                parent_manifest["runner_pid"] = None
+                parent_manifest["worker_started_at"] = None
+                parent_manifest["execution"].setdefault("cache_materialization_by_seed", {})
+                write_metrics(run_dir, parent_manifest["seed_metrics"])
+                write_parent(run_dir, parent_manifest)
+                print(
+                    f"Resuming {encoder} attempt {run_dir.name}; preserving and skipping "
+                    f"{len(valid_seed_runs)} verified seed run(s).",
+                    flush=True,
+                )
+            else:
+                run_dir = _next_attempt_dir(runs_dir, encoder)
+                run_dir.mkdir(parents=True, exist_ok=False)
+                created_at = _now()
+                parent_manifest = {
+                    "schema_version": 1,
+                    "run_id": run_dir.name,
+                    "status": "running",
+                    "created_at": created_at,
+                    "runner_pid": None,
+                    "worker_started_at": None,
+                    "experiment_protocol_id": CACHE_PROCESS_PROTOCOL_ID,
+                    "purpose": "reference_baseline_reproduction",
+                    "dataset": "hoasa",
+                    "train_dataset": "hoasa",
+                    "test_dataset": "hoasa",
+                    "architecture": "emcgcn",
+                    "encoder": encoder,
+                    "seeds": list(declared_seeds),
+                    "execution": {
+                        "mode": "fresh_process_per_declared_seed",
+                        "seed_order": list(declared_seeds),
+                        "cache_source_run_id": cache_sources[encoder]["run_id"],
+                        "cache_source_relative_path": cache_sources[encoder]["relative_path"],
+                        "cache_source_sha256": cache_sources[encoder]["sha256"],
+                        "cache_materialization_by_seed": {},
+                    },
+                    "model": {"repository": source_spec["model_id"], "revision": source_spec["model_revision"]},
+                    "requested_config": source_spec["settings"],
+                    "resolved_config": None,
+                    "seed_metrics": [],
+                    "seed_runs": {},
+                    "failures": [],
+                    "artifact_sha256": {},
+                }
+                parent_manifest_path = run_dir / "manifest.json"
+                _atomic_json(parent_manifest_path, parent_manifest)
+                _atomic_json(run_dir / "reference_metrics.json", {
+                    "run_id": run_dir.name,
+                    "metric": "PyABSA MetricVisualizer Max-Test-F1",
+                    "unit": "percent",
+                    "selection_boundary": "test set used during training for checkpoint selection; test-leaked reference only",
+                    "execution_protocol_id": CACHE_PROCESS_PROTOCOL_ID,
+                    "seeds": [],
+                })
+
+            for seed in declared_seeds:
+                if str(seed) in parent_manifest["seed_runs"]:
+                    continue
+                child_dir = run_dir / f"seed-{seed}"
+                if child_dir.exists():
+                    attempt_index = 2
+                    while (run_dir / f"seed-{seed}-attempt-{attempt_index:03d}").exists():
+                        attempt_index += 1
+                    child_dir = run_dir / f"seed-{seed}-attempt-{attempt_index:03d}"
+                child_dir.mkdir(parents=True, exist_ok=False)
+                cache_source = cache_sources[encoder]
+                source_cache = cache_source["path"]
+                expected_hash = cache_source["sha256"]
+                destination_cache = child_dir / cache_source["relative_path"]
+                materialization = "hardlink"
+                try:
+                    os.link(source_cache, destination_cache)
+                except OSError:
+                    materialization = "copy"
+                    shutil.copy2(source_cache, destination_cache)
+                if _sha256(destination_cache) != expected_hash:
+                    raise RuntimeError(f"dataset cache materialization checksum mismatch for seed {seed} for {encoder}")
+                parent_manifest["execution"]["cache_materialization_by_seed"][str(seed)] = materialization
+
+                child_log = child_dir / "training.log"
+                current.update({"current_encoder": encoder, "current_seed": seed, "worker_pid": None, "worker_started_at": None, "attempt": run_dir.name})
+                write("running", phase="launching_seed_source_process")
+                env = os.environ.copy()
+                env.update({
+                    "HF_HUB_OFFLINE": "1",
+                    "TRANSFORMERS_OFFLINE": "1",
+                    "HF_DATASETS_OFFLINE": "1",
+                    "MPLBACKEND": "Agg",
+                    "PYTHONUNBUFFERED": "1",
+                    "PYTHONIOENCODING": "utf-8",
+                    "ASTE_PINNED_DATASET_DIR": str(
+                        cache_source["path"].parent / "datasets" / "aste"
+                    ),
+                })
+                command = [
+                    str(python_exe), str(runner),
+                    "--encoder", encoder,
+                    "--run-dir", str(child_dir),
+                    "--reference-repo", str(reference_repo),
+                    "--protocol-id", CACHE_PROCESS_PROTOCOL_ID,
+                    "--seed", str(seed),
+                ]
+                print(
+                    f"Launching unchanged {source_spec['path']} in a fresh process for seed {seed} "
+                    f"({encoder}) into {child_dir.relative_to(run_dir).as_posix()}.", flush=True
+                )
+                with child_log.open("wb") as log_stream:
+                    worker = subprocess.Popen(
+                        command,
+                        cwd=child_dir,
+                        env=env,
+                        stdout=log_stream,
+                        stderr=subprocess.STDOUT,
+                        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+                    )
+                    current.update({"worker_pid": worker.pid, "worker_started_at": _now()})
+                    parent_manifest["runner_pid"] = worker.pid
+                    parent_manifest["worker_started_at"] = current["worker_started_at"]
+                    write_parent(run_dir, parent_manifest)
+                    write("running", phase="seed_source_process_training")
+                    last_write = time.monotonic()
+                    while worker.poll() is None:
+                        time.sleep(10)
+                        if time.monotonic() - last_write >= 30:
+                            write(
+                                "running",
+                                phase="seed_source_process_training",
+                                worker_log_bytes=child_log.stat().st_size if child_log.exists() else 0,
+                                last_training_progress=_latest_training_progress(child_log),
+                            )
+                            last_write = time.monotonic()
+                    return_code = worker.wait()
+
+                child_manifest_path = child_dir / "manifest.json"
+                child_manifest = _read_json(child_manifest_path) if child_manifest_path.is_file() else None
+                if child_manifest is not None:
+                    child_manifest = _finalize_artifact_hashes(child_dir)
+                child_protocol = {**source_protocol, "id": CACHE_PROCESS_PROTOCOL_ID, "seeds": [seed]}
+                if return_code == 0 and child_manifest and child_manifest.get("status") == "complete":
+                    verified_seed_metrics = _verify_reference_artifacts(
+                        {"path": child_manifest_path, "manifest": child_manifest}, child_protocol
+                    )
+                    if len(verified_seed_metrics) != 1 or int(verified_seed_metrics[0]["seed"]) != seed:
+                        raise RuntimeError(f"verified seed metrics do not match requested seed {seed} for {encoder}")
+                    seed_metric = verified_seed_metrics[0]
+                    parent_manifest["seed_runs"][str(seed)] = (
+                        f"{child_dir.name}/manifest.json"
+                    )
+                    parent_manifest["seed_metrics"].append(seed_metric)
+                    cache_record = child_manifest.get("reference", {}).get("dataset_cache_evidence", {})
+                    if cache_record.get("cache_hit_required") is not True:
+                        raise RuntimeError(f"seed {seed} did not record the required shared cache hit for {encoder}")
+                    if seed == declared_seeds[0]:
+                        parent_manifest["code"] = child_manifest.get("code")
+                        parent_manifest["source_files"] = child_manifest.get("source_files")
+                        parent_manifest["resolved_config"] = child_manifest.get("resolved_config")
+                        parent_manifest["reference"] = child_manifest.get("reference")
+                        parent_manifest["environment"] = child_manifest.get("environment")
+                    current.update({"worker_pid": None, "worker_started_at": None})
+                    write_metrics(run_dir, parent_manifest["seed_metrics"])
+                    parent_manifest["runner_pid"] = None
+                    parent_manifest["worker_started_at"] = None
+                    write_parent(run_dir, parent_manifest)
+                    _verify_isolated_reference_attempt(
+                        {"path": parent_manifest_path, "manifest": parent_manifest}, source_protocol, protocol
+                    )
+                    write("running", phase="refreshing_report_after_seed")
+                    _refresh_report(report_path, matrix_path, runs_dir)
+                    print(f"Verified {encoder} seed {seed}: {seed_metric['max_test_f1_pct']:.6f} Max-Test-F1.", flush=True)
+                else:
+                    error = (child_manifest or {}).get("failure") or f"source worker exited with status {return_code}"
+                    failure = {"encoder": encoder, "seed": seed, "attempt": run_dir.name, "status": (child_manifest or {}).get("status", "missing_manifest"), "return_code": return_code, "error": str(error)[:1000]}
+                    failures.append(failure)
+                    parent_manifest["failures"].append(failure)
+                    current.update({"worker_pid": None, "worker_started_at": None})
+                    write_metrics(run_dir, parent_manifest["seed_metrics"])
+                    parent_manifest["runner_pid"] = None
+                    parent_manifest["worker_started_at"] = None
+                    write_parent(run_dir, parent_manifest)
+                    _refresh_report(report_path, matrix_path, runs_dir)
+                    print(f"Preserved {encoder} seed {seed} as {failure['status']}; continuing without selecting a substitute seed.", flush=True)
+
+            parent_manifest["completed_at"] = _now()
+            parent_manifest["status"] = (
+                "complete"
+                if set(parent_manifest["seed_runs"]) == {str(value) for value in declared_seeds} and not parent_manifest["failures"]
+                else "complete_with_failures" if parent_manifest["seed_runs"] else "failed"
+            )
+            write_metrics(run_dir, parent_manifest["seed_metrics"])
+            write_parent(run_dir, parent_manifest)
+            if parent_manifest["status"] == "complete":
+                _verify_isolated_reference_attempt(
+                    {"path": parent_manifest_path, "manifest": parent_manifest}, source_protocol, protocol
+                )
+                completed_encoders.append(encoder)
+                print(f"Completed and verified all declared cache-process seeds for {encoder}.", flush=True)
+            current.update({"current_encoder": encoder, "current_seed": None, "worker_pid": None, "worker_started_at": None})
+            write("running", phase="refreshing_report_after_encoder")
+            _refresh_report(report_path, matrix_path, runs_dir)
+
+        complete_count = sum(
+            1 for encoder in selected_encoders
+            if any(m.get("status") == "complete" for _p, m in _reference_manifests(runs_dir, CACHE_PROCESS_PROTOCOL_ID, encoder))
+        )
+        outcome_count = sum(
+            len(m.get("seed_metrics", []))
+            for encoder in selected_encoders
+            for _p, m in _reference_manifests(runs_dir, CACHE_PROCESS_PROTOCOL_ID, encoder)
+        )
+        status = "complete" if complete_count == len(selected_encoders) and not failures else "complete_with_failures"
+        write(
+            status,
+            phase="finished",
+            completed_at=_now(),
+            complete_scripts=complete_count,
+            seed_outcomes=outcome_count,
+        )
+        _refresh_report(report_path, matrix_path, runs_dir)
+        print(
+            f"Cache-process reference queue {status}: {complete_count}/{len(selected_encoders)} source cells, "
+            f"{outcome_count}/{len(selected_encoders) * len(declared_seeds)} seed outcomes; {len(failures)} failure(s).",
+            flush=True,
+        )
+        return _read_json(marker)
+    except KeyboardInterrupt:
+        write(
+            "interrupted",
+            phase="interrupted",
+            completed_at=_now(),
+            failure_type="KeyboardInterrupt",
+            failure="notebook cache-process queue interrupted; completed and partial seed artifacts are preserved",
         )
         raise
     except BaseException as error:

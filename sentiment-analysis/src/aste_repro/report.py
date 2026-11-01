@@ -41,7 +41,7 @@ def _parsed_hoasa_rows(path: Path) -> list[tuple[str, Any]]:
 
 
 def _verify_log_step_resolution(
-    run_dir: Path, actual: dict[str, Any], expected: int,
+    run_dir: Path, actual: dict[str, Any], expected: int, expected_seeds: list[int] | None = None,
 ) -> None:
     """Validate PyABSA's logged runtime normalization of the -1 sentinel."""
     resolved = actual.get("log_step")
@@ -82,13 +82,37 @@ def _verify_log_step_resolution(
     log_steps = [int(value) for value in re.findall(r"\blog_step:(-?\d+)\s+-->\s+Calling Count", log_text)]
     seeds = [int(value) for value in re.findall(r"\bseed:(\d+)\s+-->\s+Calling Count", log_text)]
     num_steps = [int(value) for value in re.findall(r"\bNum steps\s*=\s*(\d+)", log_text)]
+    expected_seeds = [1, 2, 3] if expected_seeds is None else expected_seeds
     epochs = int(evidence.get("num_epoch", 0))
-    if evidence.get("logged_log_step_values") != log_steps or log_steps != [-1, resolved, resolved]:
+    expected_log_steps = [-1] if len(expected_seeds) == 1 else [-1, resolved, resolved]
+    if evidence.get("logged_log_step_values") != log_steps or log_steps != expected_log_steps:
         raise ValueError(f"training log does not substantiate resolved log_step in {run_dir}")
-    if evidence.get("logged_seed_order") != seeds or seeds != [1, 2, 3]:
-        raise ValueError(f"training log does not show the three declared seed starts in {run_dir}")
-    if evidence.get("logged_num_steps") != num_steps or num_steps != [resolved * epochs] * 3:
+    if evidence.get("logged_seed_order") != seeds or seeds != expected_seeds:
+        raise ValueError(f"training log does not show the expected seed starts in {run_dir}")
+    if evidence.get("logged_num_steps") != num_steps or num_steps != [resolved * epochs] * len(expected_seeds):
         raise ValueError(f"training log step counts disagree with resolved log_step in {run_dir}")
+    expected_checkpoint_steps = {str(seed): resolved for seed in expected_seeds}
+    recorded_checkpoint_steps = evidence.get("checkpoint_log_step_by_seed")
+    if recorded_checkpoint_steps is not None and recorded_checkpoint_steps != expected_checkpoint_steps:
+        raise ValueError(f"checkpoint args do not substantiate resolved log_step in {run_dir}")
+    checkpoint_steps: dict[str, set[int]] = {str(seed): set() for seed in expected_seeds}
+    for args_path in run_dir.glob("checkpoints/**/emcgcn.args.txt"):
+        fields = {}
+        for line in args_path.read_text(encoding="utf-8").splitlines():
+            key, separator, value = line.partition(":")
+            if separator and key.strip() in {"seed", "log_step"}:
+                fields[key.strip()] = value.strip()
+        try:
+            seed_text = str(int(ast.literal_eval(fields["seed"])))
+            step = int(ast.literal_eval(fields["log_step"]))
+        except (KeyError, TypeError, ValueError, SyntaxError):
+            continue
+        if seed_text in checkpoint_steps:
+            checkpoint_steps[seed_text].add(step)
+    if set(checkpoint_steps) != set(expected_checkpoint_steps) or any(
+        steps != {resolved} for steps in checkpoint_steps.values()
+    ):
+        raise ValueError(f"saved checkpoint args disagree with resolved log_step in {run_dir}")
 
 
 def _verify_seed_cache_compatibility(
@@ -124,6 +148,110 @@ def _verify_seed_cache_compatibility(
         restored = correction.get("restored_seed")
         if requested not in expected_seeds or cached == requested or restored != requested:
             raise ValueError(f"runtime seed-cache correction is inconsistent in {run_dir}")
+    for key in ("runtime_handle_restore_events", "post_dataset_load_runtime_handle_restore_events"):
+        events = evidence.get(key, [])
+        if not isinstance(events, list):
+            raise ValueError(f"runtime logger/visualizer corrections are malformed in {run_dir}")
+        for event in events:
+            if event.get("requested_seed") not in expected_seeds:
+                raise ValueError(f"runtime logger/visualizer correction has an unexpected seed in {run_dir}")
+            restored = event.get("restored_instructor_handles", [])
+            restored += event.get("restored_external_handles", [])
+            restored += event.get("restored_handles", [])
+            if not isinstance(restored, list) or not set(restored).issubset({"logger", "MV"}):
+                raise ValueError(f"runtime logger/visualizer correction is invalid in {run_dir}")
+    normalization = evidence.get("dataset_cache_key_normalization", {})
+    if normalization.get("enabled") is True:
+        child_dir = (run_dir / "datasets" / "aste").resolve()
+        pinned_dir = Path(normalization.get("pinned_dataset_directory", "")).resolve()
+        if (
+            Path(normalization.get("child_dataset_directory", "")).resolve() != child_dir
+            or Path(reference.get("run_dataset_copy_directory", "")).resolve() != child_dir
+            or Path(reference.get("dataset_directory", "")).resolve() != child_dir
+        ):
+            raise ValueError(f"cache-key normalization changed the child-local training data path in {run_dir}")
+        events = normalization.get("events", [])
+        cache_name = normalization.get("cache_file_name")
+        expected_cache_path = run_dir / str(cache_name)
+        expected_splits = {"train", "dev", "test"}
+        if (
+            len(events) != 1
+            or not cache_name
+            or not expected_cache_path.is_file()
+            or _sha256(expected_cache_path) != normalization.get("cache_file_sha256")
+        ):
+            raise ValueError(f"cache-key normalization did not verify its preloaded cache in {run_dir}")
+        event = events[0]
+        event_hashes = event.get("split_sha256", {})
+        split_hashes = normalization.get("split_sha256", {})
+        external_dataset = event.get("external_config_dataset_after_cache_load")
+        external_config_matches = (
+            Path(external_dataset).resolve() == child_dir
+            if event.get("external_config_present") is True and external_dataset
+            else event.get("external_config_present") is not True and external_dataset is None
+        )
+        if (
+            Path(event.get("requested_dataset_directory", "")).resolve() != child_dir
+            or Path(event.get("cache_key_dataset_directory", "")).resolve() != pinned_dir
+            or Path(event.get("dataset_directory_after_cache_load", "")).resolve() != child_dir
+            or not external_config_matches
+            or Path(event.get("cache_path", "")).resolve() != expected_cache_path.resolve()
+            or event.get("cache_sha256") != normalization.get("cache_file_sha256")
+            or event.get("cache_hit_confirmed_by_preloaded_file") is not True
+            or event_hashes != split_hashes
+            or set(split_hashes) != expected_splits
+        ):
+            raise ValueError(f"cache-key normalization evidence is inconsistent in {run_dir}")
+        restores = normalization.get("dataset_restore_events", [])
+        expected_methods = {
+            "BaseTrainingInstructor.load_cache_dataset",
+            "ASTETrainingInstructor._load_dataset_and_prepare_dataloader",
+        }
+        if {item.get("method") for item in restores} != expected_methods or len(restores) != 2:
+            raise ValueError(f"cache-key normalization lacks both dataset-path restorations in {run_dir}")
+        for restore in restores:
+            if (
+                Path(restore.get("requested_dataset_directory", "")).resolve() != child_dir
+                or Path(restore.get("loaded_config_dataset_directory", "")).resolve() != pinned_dir
+                or Path(restore.get("restored_dataset_directory", "")).resolve() != child_dir
+            ):
+                raise ValueError(f"child-local data path was not restored after cache loading in {run_dir}")
+        for split, expected_hash in split_hashes.items():
+            for dataset_dir in (child_dir, pinned_dir):
+                dataset_file = dataset_dir / f"{split}.txt"
+                if not dataset_file.is_file() or _sha256(dataset_file) != expected_hash:
+                    raise ValueError(f"cache-key dataset copies differ for {split} in {run_dir}")
+
+    route = evidence.get("dataset_path_routing", {})
+    routing = route
+    if routing.get("enabled") is True:
+        child_dir = (run_dir / "datasets" / "aste").resolve()
+        pinned_dir = Path(routing.get("pinned_dataset_directory", "")).resolve()
+        if (
+            Path(routing.get("child_dataset_directory", "")).resolve() != child_dir
+            or Path(reference.get("run_dataset_copy_directory", "")).resolve() != child_dir
+            or Path(reference.get("dataset_directory", "")).resolve() != pinned_dir
+        ):
+            raise ValueError(f"runtime pinned-dataset paths disagree in {run_dir}")
+        events = routing.get("events", [])
+        expected_splits = {"train", "dev", "test"}
+        if len(events) != 1:
+            raise ValueError(f"runtime did not route exactly one source dataset call in {run_dir}")
+        event = events[0]
+        event_hashes = event.get("split_sha256", {})
+        route_hashes = routing.get("split_sha256", {})
+        if (
+            Path(event.get("requested_dataset_directory", "")).resolve() != child_dir
+            or Path(event.get("pinned_cache_dataset_directory", "")).resolve() != pinned_dir
+            or event_hashes != route_hashes
+            or set(route_hashes) != expected_splits
+        ):
+            raise ValueError(f"runtime pinned-dataset routing evidence is invalid in {run_dir}")
+        for split, expected_hash in route_hashes.items():
+            for dataset_dir in (child_dir, pinned_dir):
+                dataset_file = dataset_dir / f"{split}.txt"
+                if not dataset_file.is_file() or _sha256(dataset_file) != expected_hash:
+                    raise ValueError(f"runtime pinned dataset differs for {split} in {run_dir}")
 
 
 def _verify_reference_artifacts(run: dict[str, Any], protocol: dict[str, Any]) -> list[dict[str, Any]]:
@@ -136,9 +264,24 @@ def _verify_reference_artifacts(run: dict[str, Any], protocol: dict[str, Any]) -
         raise ValueError(f"reference run {manifest.get('run_id')} has an unknown encoder")
     expected_seeds = [int(seed) for seed in protocol["seeds"]]
     reference = manifest.get("reference", {})
-    expected_dataset_dir = (run_dir / "datasets" / "aste").resolve()
-    if Path(reference.get("dataset_directory", "")).resolve() != expected_dataset_dir:
-        raise ValueError(f"source script dataset directory does not point to the verified run copy in {run_dir}")
+    execution = manifest.get("execution", {})
+    child_dataset_dir = (run_dir / "datasets" / "aste").resolve()
+    reference_dataset_dir = Path(reference.get("dataset_directory", "")).resolve()
+    if reference_dataset_dir != child_dataset_dir:
+        # Earlier failed v3 attempts temporarily routed ASTETrainer to the cache
+        # source and failed before training. Keep that negative evidence readable,
+        # but never accept it as a completed run or a metric-bearing artifact.
+        old_route = (reference.get("runtime_seed_cache_compatibility") or {}).get(
+            "dataset_path_routing", {}
+        )
+        pinned_dir = Path(old_route.get("pinned_dataset_directory", "")).resolve()
+        if (
+            manifest.get("status") == "complete"
+            or old_route.get("enabled") is not True
+            or reference_dataset_dir != pinned_dir
+            or Path(reference.get("run_dataset_copy_directory", "")).resolve() != child_dataset_dir
+        ):
+            raise ValueError(f"source-script dataset directory disagrees with its runtime evidence in {run_dir}")
     if Path((manifest.get("environment") or {}).get("working_directory", "")).resolve() != run_dir.resolve():
         raise ValueError(f"source script working directory differs from its immutable run directory in {run_dir}")
     if manifest.get("experiment_protocol_id") != protocol.get("id"):
@@ -212,16 +355,44 @@ def _verify_reference_artifacts(run: dict[str, Any], protocol: dict[str, Any]) -
             raise ValueError(f"{split} canonical HoASA source changed since the run in {run_dir}")
         if canonical_path.is_file() and _parsed_hoasa_rows(canonical_path) != _parsed_hoasa_rows(run_copy):
             raise ValueError(f"{split} source-script rows differ semantically from canonical HoASA in {run_dir}")
+    route = (reference.get("runtime_seed_cache_compatibility") or {}).get(
+        "dataset_path_routing", {}
+    )
+    if route.get("enabled") is True:
+        events = route.get("events", [])
+        if len(events) != 1 or Path(events[0].get("requested_dataset_directory", "")).resolve() != child_dataset_dir:
+            raise ValueError(f"pinned dataset-cache routing did not match the source script call in {run_dir}")
+        pinned_dataset_dir = Path(route.get("pinned_dataset_directory", "")).resolve()
+        route_hashes = route.get("split_sha256", {})
+        event_hashes = events[0].get("split_sha256", {})
+        if route_hashes != event_hashes or set(route_hashes) != {"train", "dev", "test"}:
+            raise ValueError(f"pinned dataset-cache split evidence is incomplete in {run_dir}")
+        for split, data in source_files.items():
+            pinned_copy = pinned_dataset_dir / f"{split}.txt"
+            expected_hash = data.get("run_copy_sha256")
+            if (
+                not pinned_copy.is_file()
+                or _sha256(pinned_copy) != expected_hash
+                or route_hashes.get(split) != expected_hash
+            ):
+                raise ValueError(f"pinned cache-key dataset differs from {split} in {run_dir}")
 
     requested = manifest.get("requested_config", {})
     actual = (manifest.get("resolved_config") or {}).get("actual_settings", {})
+    execution = manifest.get("execution", {})
+    if execution.get("mode") == "fresh_process_per_declared_seed":
+        child_expected_seeds = [int(execution.get("selected_seed", -1))]
+    else:
+        child_expected_seeds = expected_seeds
     for name, expected_value in source_spec.get("settings", {}).items():
         if requested.get(name) != expected_value:
             raise ValueError(f"requested source setting {name} differs in {run_dir}")
         observed = actual.get(name)
         if isinstance(expected_value, (float, int)) and not isinstance(expected_value, bool):
             if name == "log_step" and expected_value == -1 and isinstance(observed, int) and observed > 0:
-                _verify_log_step_resolution(run_dir, actual, int(expected_value))
+                _verify_log_step_resolution(
+                    run_dir, actual, int(expected_value), child_expected_seeds
+                )
                 continue
             if observed is None or not math.isclose(
                 float(observed), float(expected_value), rel_tol=0, abs_tol=1e-12
@@ -229,9 +400,51 @@ def _verify_reference_artifacts(run: dict[str, Any], protocol: dict[str, Any]) -
                 raise ValueError(f"resolved source setting {name} differs in {run_dir}")
         elif observed != expected_value:
             raise ValueError(f"resolved source setting {name} differs in {run_dir}")
-    if manifest.get("seeds") != expected_seeds or actual.get("seed") != expected_seeds:
-        raise ValueError(f"declared source seeds differ in {run_dir}")
-    _verify_seed_cache_compatibility(run_dir, reference, expected_seeds)
+    if execution.get("mode") == "fresh_process_per_declared_seed":
+        selected_seed = int(execution.get("selected_seed", -1))
+        if manifest.get("seeds") != [selected_seed] or selected_seed not in expected_seeds:
+            raise ValueError(f"isolated source seed declaration differs in {run_dir}")
+        if actual.get("seed") != source_spec.get("settings", {}).get("seed"):
+            raise ValueError(f"unchanged source seed list differs in {run_dir}")
+        single_seed = reference.get("runtime_single_seed_execution", {})
+        single_seed_copy = run_dir / single_seed.get("runtime_source_snapshot", "")
+        if (
+            single_seed.get("mode") != "fresh_process_per_declared_seed"
+            or single_seed.get("selected_seed") != selected_seed
+            or not single_seed_copy.is_file()
+            or _sha256(single_seed_copy) != single_seed.get("runtime_source_sha256")
+            or len(single_seed.get("events", [])) != 1
+            or single_seed["events"][0].get("executed_seed") != selected_seed
+            or single_seed["events"][0].get("declared_seeds") != source_spec.get("settings", {}).get("seed")
+        ):
+            raise ValueError(f"fresh-process seed execution evidence is invalid in {run_dir}")
+        installed_trainer = Path(single_seed.get("runtime_source_path", ""))
+        if installed_trainer.is_file() and _sha256(installed_trainer) != single_seed.get("runtime_source_sha256"):
+            raise ValueError(f"installed PyABSA trainer source changed since the run in {run_dir}")
+        cache_evidence = reference.get("dataset_cache_evidence", {})
+        log_text = (run_dir / "training.log").read_text(encoding="utf-8", errors="replace")
+        logged_cache_names = {
+            Path(value.strip()).name
+            for value in re.findall(r"Load cache dataset from ([^\r\n]+\.cache)", log_text)
+        }
+        preloaded_hashes = cache_evidence.get("preloaded_cache_files", {})
+        for cache_name, expected_hash in cache_evidence.get("cache_file_sha256", {}).items():
+            cache_file = run_dir / cache_name
+            if not cache_file.is_file() or _sha256(cache_file) != expected_hash:
+                raise ValueError(f"dataset-cache artifact checksum mismatch in {run_dir}")
+        for cache_name, expected_hash in preloaded_hashes.items():
+            cache_file = run_dir / cache_name
+            if not cache_file.is_file() or _sha256(cache_file) != expected_hash:
+                raise ValueError(f"preloaded dataset-cache artifact changed in {run_dir}")
+        if cache_evidence.get("cache_hit_required"):
+            if not (logged_cache_names & set(preloaded_hashes)):
+                raise ValueError(f"declared shared dataset cache was not loaded in {run_dir}")
+            if cache_evidence.get("cache_key_excludes_seed") is not True:
+                raise ValueError(f"PyABSA cache-key behavior is not recorded in {run_dir}")
+    else:
+        if manifest.get("seeds") != expected_seeds or actual.get("seed") != expected_seeds:
+            raise ValueError(f"declared source seeds differ in {run_dir}")
+    _verify_seed_cache_compatibility(run_dir, reference, child_expected_seeds)
 
     metric_path = run_dir / "reference_metrics.json"
     if not metric_path.is_file():
@@ -240,8 +453,8 @@ def _verify_reference_artifacts(run: dict[str, Any], protocol: dict[str, Any]) -
     seed_metrics = manifest.get("seed_metrics", [])
     if metric_doc.get("seeds") != seed_metrics:
         raise ValueError(f"metric file and manifest seed outcomes disagree in {run_dir}")
-    if [int(item.get("seed", -1)) for item in seed_metrics] != expected_seeds:
-        raise ValueError(f"source run does not contain exactly the declared three seeds in {run_dir}")
+    if [int(item.get("seed", -1)) for item in seed_metrics] != child_expected_seeds:
+        raise ValueError(f"source run seed metrics disagree with its declared execution in {run_dir}")
     for item in seed_metrics:
         score = float(item["max_test_f1_pct"])
         if not math.isfinite(score) or not 0 <= score <= 100:
@@ -294,7 +507,7 @@ def _reference_baseline_section(
         "This reproduction runs the four unchanged local PyABSA source scripts, one per encoder, with each script's declared seeds `1, 2, 3`. It reports `MetricVisualizer Max-Test-F1`, which selects the best checkpoint using test-set scores during training. These measurements are test-leaked reference diagnostics and are not clean held-out estimates; they are never pooled with the validation-selected v3 results above.",
         "",
         "Every complete row below is recomputed from the three per-seed metrics in its source-run manifest. The source script, resolved configuration, cached model revision, train/dev/test data copies, and every saved run artifact checksum are validated before the row is emitted. Workspace source/config files are snapshotted under each run's `provenance/workspace-source/` so later code edits do not invalidate historical provenance.",
-        "PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. The runner records the installed instructor source checksum, snapshots that source, and verifies the three seed logs (`-1` on initialization, then the resolved value) and `Num steps` before accepting this normalization. Any earlier validation rejection corrected under this rule retains the byte-for-byte original failed manifest and a checksum-linked correction record; source scripts and training settings remain unchanged.",
+        "PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. Each fresh-seed process logs the requested sentinel once; the saved checkpoint args and `Num steps` prove the resolved value. Multi-seed source runs retain their own startup records. A validation rejection is corrected only when these durable artifacts prove that the rejection was a verifier error; source scripts and training settings remain unchanged.",
         "",
         "| Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |",
         "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |",
@@ -359,7 +572,7 @@ def _reference_baseline_section(
         )
         lines.extend(
             [
-                "For source-script attempts with dataset-cache hits, the PyABSA 2.4.3 cache key excludes `seed` while the cached object includes a serialized `ConfigManager`. The runner preserves the requested seed across cache restores, snapshots and checksums the installed cache-loader source, and records each correction. Recorded events: "
+                "For source-script attempts with dataset-cache hits, the PyABSA 2.4.3 cache key excludes `seed` but includes the dataset path, and the cache stores a serialized `ConfigManager`. The runner normalizes only the dataset path used to compute the cache filename to the pinned v2 location, while keeping all training data paths child-local and byte-verified against the pinned source. It then preserves the requested seed and current process logger/MetricVisualizer after cache loads and records each correction. Recorded seed corrections: "
                 + correction_text
                 + ". The source scripts and declared training settings are unchanged.",
                 "",
@@ -368,17 +581,220 @@ def _reference_baseline_section(
     else:
         lines.extend(
             [
-                "Source-script attempts snapshot the installed PyABSA cache-loader source and check whether a dataset-cache hit replaced the requested seed. Any such restoration is recorded and verified before scores are reported.",
+                "Source-script attempts snapshot the installed PyABSA cache-loader source and verify cache-load behavior before scores are reported.",
                 "",
             ]
         )
     lines.extend(
         [
             "",
-            "Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); the three declared source-script seeds remain explicit and are not represented as a matched rerun. A below-target result is reported as measured and is not retried or retuned based on test scores.",
+            "Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); all three declared source-script seeds remain explicit in the reproduction. A measured miss is audited for a demonstrated source, runtime, data, or configuration mismatch; test scores do not change settings, seed selection, or stopping decisions.",
             "",
         ]
     )
+    return lines
+
+
+def _verify_isolated_reference_attempt(
+    run: dict[str, Any],
+    source_protocol: dict[str, Any],
+    cache_protocol: dict[str, Any],
+    *,
+    verify_parent_artifacts: bool = True,
+) -> list[dict[str, Any]]:
+    """Verify per-seed source-process manifests and the containing attempt hashes."""
+    manifest = run["manifest"]
+    run_dir = run["path"].parent
+    expected_seeds = [int(value) for value in cache_protocol["seeds"]]
+    seed_runs = manifest.get("seed_runs", {})
+    execution = manifest.get("execution", {})
+    encoder = manifest.get("encoder")
+    cache_source_runs = cache_protocol.get("cache_source_runs", {})
+    cache_source_run_id = execution.get("cache_source_run_id")
+    cache_source_relative_path = execution.get("cache_source_relative_path")
+    cache_source_sha256 = execution.get("cache_source_sha256")
+    if (
+        encoder not in cache_source_runs
+        or cache_source_run_id != cache_source_runs.get(encoder)
+        or not isinstance(cache_source_relative_path, str)
+        or not isinstance(cache_source_sha256, str)
+    ):
+        raise ValueError(f"pinned shared-cache provenance is incomplete in {run_dir}")
+    cache_source_manifest_path = run_dir.parent / str(cache_source_run_id) / "manifest.json"
+    if not cache_source_manifest_path.is_file():
+        raise ValueError(f"pinned shared-cache source manifest is missing in {run_dir}")
+    cache_source_manifest = json.loads(cache_source_manifest_path.read_text(encoding="utf-8"))
+    cache_source_path = cache_source_manifest_path.parent / cache_source_relative_path
+    if (
+        cache_source_manifest.get("status") != "complete"
+        or cache_source_manifest.get("experiment_protocol_id") != source_protocol.get("id")
+        or cache_source_manifest.get("encoder") != encoder
+        or cache_source_manifest.get("artifact_sha256", {}).get(cache_source_relative_path) != cache_source_sha256
+        or not cache_source_path.is_file()
+        or _sha256(cache_source_path) != cache_source_sha256
+    ):
+        raise ValueError(f"pinned shared-cache source checksum/provenance changed in {run_dir}")
+    expected_pinned_dataset = (
+        cache_source_manifest_path.parent / "datasets" / "aste"
+    ).resolve()
+    if Path(cache_source_manifest.get("reference", {}).get("dataset_directory", "")).resolve() != expected_pinned_dataset:
+        raise ValueError(f"v2 cache-source dataset directory changed in {run_dir}")
+    metrics_by_seed: dict[int, dict[str, Any]] = {}
+    child_protocol = {
+        **source_protocol,
+        "id": cache_protocol["id"],
+    }
+    for seed in expected_seeds:
+        relative = seed_runs.get(str(seed))
+        if not relative:
+            continue
+        child_manifest_path = run_dir / relative
+        if not child_manifest_path.is_file():
+            raise ValueError(f"isolated seed manifest is missing for {seed} in {run_dir}")
+        child_manifest = json.loads(child_manifest_path.read_text(encoding="utf-8"))
+        if child_manifest.get("status") != "complete":
+            if seed in {int(item["seed"]) for item in manifest.get("seed_metrics", [])}:
+                raise ValueError(f"incomplete isolated seed has a reported score in {run_dir}")
+            continue
+        child_protocol["seeds"] = [seed]
+        verified = _verify_reference_artifacts(
+            {"path": child_manifest_path, "manifest": child_manifest}, child_protocol
+        )
+        if len(verified) != 1 or int(verified[0]["seed"]) != seed:
+            raise ValueError(f"isolated source process did not yield exactly seed {seed} in {run_dir}")
+        child_cache = child_manifest.get("reference", {}).get("dataset_cache_evidence", {})
+        child_normalization = (
+            (child_manifest.get("reference", {}).get("runtime_seed_cache_compatibility") or {})
+            .get("dataset_cache_key_normalization", {})
+        )
+        expected_preloaded = {cache_source_relative_path: cache_source_sha256}
+        materialization = execution.get("cache_materialization_by_seed", {}).get(str(seed))
+        if (
+            child_cache.get("preloaded_cache_files") != expected_preloaded
+            or child_cache.get("cache_hit_required") is not True
+            or child_normalization.get("enabled") is not True
+            or Path(child_normalization.get("pinned_dataset_directory", "")).resolve() != expected_pinned_dataset
+            or Path(child_manifest.get("reference", {}).get("dataset_directory", "")).resolve()
+            != (child_manifest_path.parent / "datasets" / "aste").resolve()
+            or materialization not in {"hardlink", "copy"}
+        ):
+            raise ValueError(f"seed {seed} did not prove use of the pinned shared cache in {run_dir}")
+        metrics_by_seed[seed] = verified[0]
+
+    declared_metrics = manifest.get("seed_metrics", [])
+    # A resumed queue may adopt previously completed seeds in declared order,
+    # while newly completed seeds are appended in execution order. Compare the
+    # records by seed identity so valid completion order does not invalidate
+    # otherwise identical, checksum-verified child evidence.
+    declared_metrics_by_seed = {
+        int(item["seed"]): item for item in declared_metrics
+    }
+    verified_metrics_by_seed = {
+        seed: metrics_by_seed[seed]
+        for seed in expected_seeds
+        if seed in metrics_by_seed
+    }
+    if (
+        len(declared_metrics_by_seed) != len(declared_metrics)
+        or declared_metrics_by_seed != verified_metrics_by_seed
+    ):
+        raise ValueError(f"aggregate seed metrics differ from verified child runs in {run_dir}")
+    if manifest.get("status") == "complete" and set(metrics_by_seed) != set(expected_seeds):
+        raise ValueError(f"complete isolated source attempt lacks its full seed set in {run_dir}")
+
+    if verify_parent_artifacts:
+        expected_hashes = manifest.get("artifact_sha256", {})
+        actual_files = {
+            path.relative_to(run_dir).as_posix(): path
+            for path in run_dir.rglob("*")
+            if path.is_file() and path != run["path"]
+        }
+        if set(expected_hashes) != set(actual_files):
+            raise ValueError(f"isolated parent artifact manifest is incomplete or stale in {run_dir}")
+        for relative, path in actual_files.items():
+            if _sha256(path) != expected_hashes[relative]:
+                raise ValueError(f"isolated parent artifact checksum mismatch for {relative} in {run_dir}")
+    return [metrics_by_seed[seed] for seed in expected_seeds if seed in metrics_by_seed]
+
+
+def _reference_baseline_process_section(
+    all_runs: list[dict[str, Any]],
+    source_protocol: dict[str, Any],
+    cache_protocol: dict[str, Any],
+) -> list[str]:
+    runs = [
+        run for run in all_runs
+        if run["manifest"].get("experiment_protocol_id") == cache_protocol.get("id")
+        and run["manifest"].get("purpose") == "reference_baseline_reproduction"
+    ]
+    by_encoder: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for run in runs:
+        encoder = run["manifest"].get("encoder")
+        if encoder not in cache_protocol.get("encoders", []):
+            raise ValueError(f"unknown encoder in isolated reference manifest: {run['path']}")
+        by_encoder[encoder].append(run)
+
+    lines = [
+        "",
+        "## PyABSA source-script cache/process parity rerun (v3; test-selected)",
+        "",
+        "This pass addresses an evidenced execution mismatch in v2 for the two source scripts with `overwrite_cache=false`. PyABSA's cache key excludes `seed` but includes `dataset`; each v3 fresh process uses the cache created by its completed v2 source run. To make that filename resolve without violating PyABSA's requirement that data files live under the current seed run, the runtime normalizes only the dataset value during cache-key calculation, verifies the pinned and child-local train/dev/test bytes, and restores the child-local dataset path after both cache loads. The preloaded cache is linked into the child run directory (or copied if hard links are unavailable) and must be logged as loaded before its score is accepted. Source scripts and training settings remain unchanged.",
+        "",
+        "The metric remains PyABSA `Max-Test-F1`, selected on test data during training. These source-run results are test-leaked diagnostics and stay separate from validation-selected v3 results. Every score below is recomputed from a seed child manifest after verifying its unchanged source/config/model/data provenance and artifact hashes; incomplete attempts remain visible and do not become complete means.",
+        "",
+        "IndoBERT's frozen reference contains two scores with unknown seed identities (`n=2`), while this pass executes the three declared seeds. That sample-size mismatch remains explicit in the comparison.",
+        "",
+        "| Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |",
+    ]
+    expected_seeds = [int(seed) for seed in cache_protocol["seeds"]]
+    for encoder in cache_protocol["encoders"]:
+        attempts = sorted(
+            by_encoder.get(encoder, []),
+            key=lambda row: (row["manifest"].get("created_at", ""), row["manifest"].get("run_id", "")),
+        )
+        complete = [row for row in attempts if row["manifest"].get("status") == "complete"]
+        if len(complete) > 1:
+            raise ValueError(f"multiple complete isolated-process attempts exist for {encoder}; refusing to pool")
+        selected = complete[0] if complete else (attempts[-1] if attempts else None)
+        metrics = (
+            _verify_isolated_reference_attempt(
+                selected,
+                source_protocol,
+                cache_protocol,
+                verify_parent_artifacts=selected["manifest"].get("status") != "running",
+            )
+            if selected is not None
+            else []
+        )
+        scores = {int(item["seed"]): float(item["max_test_f1_pct"]) for item in metrics}
+        mean = statistics.mean(scores.values()) if scores else None
+        target = source_protocol["reported_targets"][encoder]
+        delta = mean - float(target["mean_f1_pct"]) if mean is not None else None
+        state = selected["manifest"].get("status", "not run") if selected else "not run"
+        if state == "complete":
+            state = "complete; test-leaked"
+        elif selected and selected["manifest"].get("failures"):
+            state = f"{state}; seed failures={len(selected['manifest']['failures'])}"
+        score_text = ", ".join(
+            f"{seed}:{scores[seed]:.4f}" if seed in scores else f"{seed}:—"
+            for seed in expected_seeds
+        )
+        attempts_text = f"{len(scores)}/{len(expected_seeds)}"
+        if len(attempts) > 1:
+            attempts_text += f"; attempts={len(attempts)}"
+        lines.append(
+            f"| {encoder} | {state} | {attempts_text} | {score_text} | "
+            f"{mean:.8f}" if mean is not None else
+            f"| {encoder} | {state} | {attempts_text} | {score_text} | —"
+        )
+        if mean is not None:
+            lines[-1] += (
+                f" | {float(target['mean_f1_pct']):.8f} | {target['n']} | {delta:+.8f} |"
+            )
+        else:
+            lines[-1] += f" | {float(target['mean_f1_pct']):.8f} | {target['n']} | — |"
+    lines.extend(["", "Cache artifacts are kept inside each immutable attempt. A seed is counted only after its training log proves the expected cache hit (when required), one seed start, the resolved `log_step`, and the matching cache/source/config/data/model hashes.", ""])
     return lines
 
 
@@ -987,6 +1403,15 @@ def build_report(
                 ),
             )
         )
+        process_protocol = matrix.get("reference_baseline_cache_process_protocol")
+        if process_protocol:
+            lines.extend(
+                _reference_baseline_process_section(
+                    all_runs,
+                    reference_protocol,
+                    process_protocol,
+                )
+            )
     lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 

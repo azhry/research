@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parents[2]
 MATRIX_PATH = ROOT / "configs" / "experiment-matrix.json"
 CANONICAL_DATA = ROOT / "data" / "sources" / "hoasa"
 PROTOCOL_ID = "pyabsa-2.4.3-emcgcn-reference-max-test-v2-seed-cache-compatible"
+CACHE_PROCESS_PROTOCOL_ID = "pyabsa-2.4.3-emcgcn-reference-max-test-v3-fresh-seed-process-cache-hit"
 SEEDS = [1, 2, 3]
 
 
@@ -125,7 +126,12 @@ def _snapshot_workspace_source(code_files: dict[str, Path], run_dir: Path) -> di
 
 
 def _resolve_log_step_sentinel(
-    trainer: Any, expected: dict[str, Any], observed: Any, log_path: Path, run_dir: Path
+    trainer: Any,
+    expected: dict[str, Any],
+    observed: Any,
+    log_path: Path,
+    run_dir: Path,
+    expected_seeds: list[int] | None = None,
 ) -> dict[str, Any]:
     """Record PyABSA's evidenced -1 => train-loader-length runtime normalization."""
     if expected.get("settings", {}).get("log_step") != -1:
@@ -153,12 +159,30 @@ def _resolve_log_step_sentinel(
     seeds = [int(value) for value in re.findall(r"\bseed:(\d+)\s+-->\s+Calling Count", log_text)]
     num_steps = [int(value) for value in re.findall(r"\bNum steps\s*=\s*(\d+)", log_text)]
     epochs = int(expected["settings"]["num_epoch"])
-    if log_steps != [-1, observed, observed]:
-        raise RuntimeError(f"training log does not prove expected log_step resolution: {log_steps!r}")
-    if seeds != SEEDS:
-        raise RuntimeError(f"training log does not prove all declared seed starts: {seeds!r}")
-    if num_steps != [observed * epochs] * len(SEEDS):
+    expected_seeds = SEEDS if expected_seeds is None else expected_seeds
+    # A fresh process logs the requested -1 once. PyABSA normalizes its
+    # in-memory config after constructing the dataloader; the normalized value
+    # is durable in the saved checkpoint args, not in another startup log line.
+    expected_log_steps = [-1] if len(expected_seeds) == 1 else [-1, observed, observed]
+    if log_steps != expected_log_steps:
+        raise RuntimeError(f"training log does not prove expected log_step request: {log_steps!r}")
+    if seeds != expected_seeds:
+        raise RuntimeError(f"training log does not prove expected seed starts {expected_seeds!r}: {seeds!r}")
+    if num_steps != [observed * epochs] * len(expected_seeds):
         raise RuntimeError(f"training log step counts disagree with resolved log_step: {num_steps!r}")
+    checkpoint_metrics = _checkpoint_max_test_metrics(
+        run_dir, expected_seeds, str(expected.get("model_id", ""))
+    )
+    checkpoint_log_steps = {
+        int(item["seed"]): int(item["log_step"])
+        for item in checkpoint_metrics
+        if item.get("log_step") is not None
+    }
+    if checkpoint_log_steps != {seed: observed for seed in expected_seeds}:
+        raise RuntimeError(
+            "saved checkpoint args do not prove the expected normalized log_step: "
+            f"{checkpoint_log_steps!r}"
+        )
 
     snapshot = run_dir / "provenance" / "runtime" / "pyabsa_instructor.py"
     snapshot.parent.mkdir(parents=True, exist_ok=True)
@@ -177,6 +201,7 @@ def _resolve_log_step_sentinel(
         "logged_seed_order": seeds,
         "logged_log_step_values": log_steps,
         "logged_num_steps": num_steps,
+        "checkpoint_log_step_by_seed": {str(seed): step for seed, step in checkpoint_log_steps.items()},
         "num_epoch": epochs,
         "evidence_verified": True,
     }
@@ -213,8 +238,82 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
     if _sha256(aste_source_snapshot) != aste_source_hash:
         raise RuntimeError("PyABSA ASTE instructor source snapshot checksum mismatch")
 
+    dataset_cache_key_events: list[dict[str, Any]] = []
+    dataset_restore_events: list[dict[str, Any]] = []
+    pinned_dataset_text = os.environ.get("ASTE_PINNED_DATASET_DIR")
+    pinned_dataset_dir = Path(pinned_dataset_text).resolve() if pinned_dataset_text else None
+    child_dataset_dir = (run_dir / "datasets" / "aste").resolve()
+    preloaded_cache_files = {
+        path.name: _sha256(path)
+        for path in run_dir.glob("*.dataset.*.cache")
+        if path.is_file()
+    }
+
+    def config_dataset(config: Any) -> Any:
+        if config is None:
+            return None
+        args = getattr(config, "args", None)
+        if isinstance(args, dict) and "dataset" in args:
+            return args["dataset"]
+        return getattr(config, "dataset", None)
+
+    def set_config_dataset(config: Any, value: str) -> Any:
+        if config is None:
+            return None
+        previous = config_dataset(config)
+        setattr(config, "dataset", value)
+        args = getattr(config, "args", None)
+        if isinstance(args, dict):
+            args["dataset"] = value
+        return previous
+
+    if pinned_dataset_dir is not None:
+        if not pinned_dataset_dir.is_dir():
+            raise FileNotFoundError(f"pinned dataset-cache source directory is missing: {pinned_dataset_dir}")
+        if len(preloaded_cache_files) != 1:
+            raise RuntimeError("fresh seed process must contain exactly one preloaded dataset cache")
+        data_hashes = {}
+        for split in ("train", "dev", "test"):
+            child_path = child_dataset_dir / f"{split}.txt"
+            pinned_path = pinned_dataset_dir / f"{split}.txt"
+            if not child_path.is_file() or not pinned_path.is_file():
+                raise FileNotFoundError(f"cache parity dataset split is missing for {split}")
+            child_hash = _sha256(child_path)
+            pinned_hash = _sha256(pinned_path)
+            if child_hash != pinned_hash:
+                raise RuntimeError(f"pinned cache dataset differs from child source data for {split}")
+            data_hashes[split] = child_hash
+
+        expected_cache_name = next(iter(preloaded_cache_files))
+        expected_cache_sha256 = preloaded_cache_files[expected_cache_name]
+        if expected_cache_sha256 == "":
+            raise RuntimeError("preloaded dataset cache has no checksum")
+    else:
+        data_hashes = {}
+        expected_cache_name = None
+        expected_cache_sha256 = None
+
     corrections: list[dict[str, Any]] = []
     post_load_corrections: list[dict[str, Any]] = []
+    runtime_handle_corrections: list[dict[str, Any]] = []
+    post_load_runtime_handle_corrections: list[dict[str, Any]] = []
+
+    def runtime_handles(config: Any) -> dict[str, Any]:
+        return {
+            name: getattr(config, name, None)
+            for name in ("logger", "MV")
+            if config is not None and getattr(config, name, None) is not None
+        }
+
+    def restore_runtime_handles(config: Any, handles: dict[str, Any]) -> list[str]:
+        restored = []
+        if config is None:
+            return restored
+        for name, value in handles.items():
+            if getattr(config, name, None) is not value:
+                setattr(config, name, value)
+                restored.append(name)
+        return restored
 
     def restore_config_seed(config: Any, requested_seed: int) -> tuple[bool, bool]:
         restored_attribute = getattr(config, "seed", None) != requested_seed
@@ -228,13 +327,72 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
 
     def preserve_requested_seed(instructor: Any, *args: Any, **kwargs: Any) -> Any:
         requested_seed = getattr(instructor.config, "seed", None)
+        requested_dataset = config_dataset(instructor.config)
+        if pinned_dataset_dir is not None and Path(str(requested_dataset)).resolve() != child_dataset_dir:
+            raise RuntimeError(
+                "PyABSA cache-loader dataset path differs from the child-local data directory: "
+                f"{requested_dataset!r} != {child_dataset_dir}"
+            )
+        requested_dataset = str(Path(str(requested_dataset)).resolve()) if requested_dataset else None
+        instructor_handles = runtime_handles(instructor.config)
         external_config = kwargs.get("config")
+        external_requested_dataset = config_dataset(external_config)
+        external_handles = runtime_handles(external_config)
         external_requested_seed = getattr(external_config, "seed", None)
         external_args = getattr(external_config, "args", None)
         external_requested_args_seed = (
             external_args.get("seed") if isinstance(external_args, dict) else None
         )
-        cache_path = original(instructor, *args, **kwargs)
+        if pinned_dataset_dir is not None:
+            set_config_dataset(instructor.config, str(pinned_dataset_dir))
+        try:
+            cache_path = original(instructor, *args, **kwargs)
+        finally:
+            loaded_dataset = config_dataset(instructor.config)
+            if requested_dataset is not None:
+                set_config_dataset(instructor.config, requested_dataset)
+            if external_config is not None and external_requested_dataset is not None:
+                set_config_dataset(external_config, str(Path(str(external_requested_dataset)).resolve()))
+        resolved_cache_path = (
+            (Path.cwd() / cache_path).resolve()
+            if cache_path is not None and not Path(str(cache_path)).is_absolute()
+            else Path(str(cache_path)).resolve()
+            if cache_path is not None
+            else None
+        )
+        if pinned_dataset_dir is not None:
+            expected_cache_path = (Path.cwd() / str(expected_cache_name)).resolve()
+            if (
+                resolved_cache_path != expected_cache_path
+                or not expected_cache_path.is_file()
+                or _sha256(expected_cache_path) != expected_cache_sha256
+                or getattr(instructor.config, "overwrite_cache", False)
+            ):
+                raise RuntimeError(
+                    "PyABSA cache-key normalization did not resolve to the preloaded pinned cache"
+                )
+            dataset_cache_key_events.append(
+                {
+                    "requested_dataset_directory": requested_dataset,
+                    "cache_key_dataset_directory": str(pinned_dataset_dir),
+                    "dataset_directory_after_cache_load": config_dataset(instructor.config),
+                    "external_config_dataset_after_cache_load": config_dataset(external_config),
+                    "external_config_present": external_config is not None,
+                    "cache_path": str(resolved_cache_path),
+                    "cache_sha256": _sha256(expected_cache_path),
+                    "cache_hit_confirmed_by_preloaded_file": True,
+                    "split_sha256": dict(data_hashes),
+                }
+            )
+        if requested_dataset is not None:
+            dataset_restore_events.append(
+                {
+                    "method": "BaseTrainingInstructor.load_cache_dataset",
+                    "requested_dataset_directory": requested_dataset,
+                    "loaded_config_dataset_directory": loaded_dataset,
+                    "restored_dataset_directory": config_dataset(instructor.config),
+                }
+            )
         cached_seed = getattr(instructor.config, "seed", None)
         cached_args = getattr(instructor.config, "args", None)
         cached_args_seed = cached_args.get("seed") if isinstance(cached_args, dict) else None
@@ -250,6 +408,8 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
                 restored_external_attribute, restored_external_args = restore_config_seed(
                     external_config, requested_seed
                 )
+            restored_instructor_handles = restore_runtime_handles(instructor.config, instructor_handles)
+            restored_external_handles = restore_runtime_handles(external_config, external_handles)
             if any(
                 (
                     restored_instructor_attribute,
@@ -280,6 +440,15 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
                         "cache_path": str(cache_path) if cache_path is not None else None,
                     }
                 )
+            if restored_instructor_handles or restored_external_handles:
+                runtime_handle_corrections.append(
+                    {
+                        "requested_seed": requested_seed,
+                        "restored_instructor_handles": restored_instructor_handles,
+                        "restored_external_handles": restored_external_handles,
+                        "cache_path": str(cache_path) if cache_path is not None else None,
+                    }
+                )
         return cache_path
 
     def preserve_requested_seed_after_dataset_load(
@@ -289,7 +458,21 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
         # load_cache_dataset returns. Capture the seed before that second load
         # and restore it after the cached ConfigManager has replaced self.config.
         requested_seed = getattr(instructor.config, "seed", None)
+        requested_dataset = config_dataset(instructor.config)
+        requested_dataset = str(Path(str(requested_dataset)).resolve()) if requested_dataset else None
+        requested_handles = runtime_handles(instructor.config)
         result = original_aste_prepare(instructor, *args, **kwargs)
+        loaded_dataset = config_dataset(instructor.config)
+        if requested_dataset is not None:
+            set_config_dataset(instructor.config, requested_dataset)
+            dataset_restore_events.append(
+                {
+                    "method": "ASTETrainingInstructor._load_dataset_and_prepare_dataloader",
+                    "requested_dataset_directory": requested_dataset,
+                    "loaded_config_dataset_directory": loaded_dataset,
+                    "restored_dataset_directory": config_dataset(instructor.config),
+                }
+            )
         loaded_seed = getattr(instructor.config, "seed", None)
         loaded_args = getattr(instructor.config, "args", None)
         loaded_args_seed = loaded_args.get("seed") if isinstance(loaded_args, dict) else None
@@ -297,6 +480,7 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
             restored_attribute, restored_args = restore_config_seed(
                 instructor.config, requested_seed
             )
+            restored_handles = restore_runtime_handles(instructor.config, requested_handles)
             if restored_attribute or restored_args:
                 post_load_corrections.append(
                     {
@@ -309,6 +493,13 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
                             if isinstance(getattr(instructor.config, "args", None), dict)
                             else None
                         ),
+                    }
+                )
+            if restored_handles:
+                post_load_runtime_handle_corrections.append(
+                    {
+                        "requested_seed": requested_seed,
+                        "restored_handles": restored_handles,
                     }
                 )
         return result
@@ -343,15 +534,86 @@ def _install_seed_cache_compatibility(run_dir: Path) -> tuple[dict[str, Any], An
         "behavior": (
             "PyABSA 2.4.3 omits seed from its dataset-cache key and reloads cached ConfigManager state in both "
             "BaseTrainingInstructor.load_cache_dataset and ASTETrainingInstructor._load_dataset_and_prepare_dataloader; "
-            "the wrapper restores the requested seed in both the ConfigManager attribute and args mapping after each load."
+            "the runtime wrapper normalizes only the dataset path while computing the cache filename, then restores "
+            "the seed-local dataset path, requested seed, and fresh-process logger/MetricVisualizer after each load. "
+            "The cache-key dataset and child-local training data are byte-verified identical."
         ),
         "seed_restore_events": corrections,
         "post_dataset_load_seed_restore_events": post_load_corrections,
+        "runtime_handle_restore_events": runtime_handle_corrections,
+        "post_dataset_load_runtime_handle_restore_events": post_load_runtime_handle_corrections,
+        "dataset_cache_key_normalization": {
+            "enabled": pinned_dataset_dir is not None,
+            "pinned_dataset_directory": str(pinned_dataset_dir) if pinned_dataset_dir else None,
+            "child_dataset_directory": str(child_dataset_dir),
+            "cache_file_name": expected_cache_name,
+            "cache_file_sha256": expected_cache_sha256,
+            "split_sha256": data_hashes if pinned_dataset_dir is not None else {},
+            "events": dataset_cache_key_events,
+            "dataset_restore_events": dataset_restore_events,
+        },
     }
     return evidence, restore_runtime_method
 
 
-def _get_score_series(metric_visualizer: Any) -> list[float]:
+def _install_single_seed_training(run_dir: Path, selected_seed: int) -> tuple[dict[str, Any], Any]:
+    """Run one declared source seed in a fresh process, as the historical logs do."""
+    from pyabsa.framework.trainer_class.trainer_template import Trainer
+
+    original = Trainer._run
+    source_name = inspect.getsourcefile(original)
+    if not source_name:
+        raise RuntimeError("could not locate PyABSA Trainer._run source")
+    source_path = Path(source_name).resolve()
+    snapshot = run_dir / "provenance" / "runtime" / "pyabsa_trainer_template.py"
+    snapshot.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, snapshot)
+    source_hash = _sha256(source_path)
+    if _sha256(snapshot) != source_hash:
+        raise RuntimeError("PyABSA Trainer._run source snapshot checksum mismatch")
+
+    events: list[dict[str, Any]] = []
+
+    def run_one_seed(instructor: Any, *args: Any, **kwargs: Any) -> Any:
+        original_seeds = getattr(instructor.config, "seed", None)
+        declared = list(original_seeds) if isinstance(original_seeds, (list, tuple)) else [original_seeds]
+        if selected_seed not in declared:
+            raise RuntimeError(
+                f"selected seed {selected_seed} is not in unchanged source declaration {declared!r}"
+            )
+        instructor.config.seed = [selected_seed]
+        events.append({"declared_seeds": declared, "executed_seed": selected_seed})
+        try:
+            return original(instructor, *args, **kwargs)
+        finally:
+            instructor.config.seed = original_seeds
+
+    run_one_seed.__name__ = original.__name__
+    run_one_seed.__doc__ = original.__doc__
+    Trainer._run = run_one_seed
+
+    def restore() -> None:
+        if Trainer._run is run_one_seed:
+            Trainer._run = original
+
+    evidence = {
+        "mode": "fresh_process_per_declared_seed",
+        "method": "pyabsa.framework.trainer_class.trainer_template.Trainer._run",
+        "selected_seed": selected_seed,
+        "runtime_source_path": str(source_path),
+        "runtime_source_sha256": source_hash,
+        "runtime_source_snapshot": snapshot.relative_to(run_dir).as_posix(),
+        "events": events,
+        "behavior": (
+            "The unchanged source script declares seeds [1, 2, 3]. The historical local logs show one seed start and one metric record per fresh process. "
+            "This runtime wrapper narrows only the Trainer._run seed loop to the currently declared seed; each seed runs in a separate process."
+        ),
+    }
+    return evidence, restore
+
+
+def _get_score_series(metric_visualizer: Any, expected_seeds: list[int] | None = None) -> list[float]:
+    expected_seeds = SEEDS if expected_seeds is None else expected_seeds
     metrics = getattr(metric_visualizer, "metrics", None)
     if not isinstance(metrics, dict):
         raise RuntimeError("MetricVisualizer did not expose a metrics mapping")
@@ -359,9 +621,9 @@ def _get_score_series(metric_visualizer: Any) -> list[float]:
     if not isinstance(max_test, dict):
         raise RuntimeError("source script did not record MetricVisualizer Max-Test-F1")
     trial = max_test.get("trial0")
-    if not isinstance(trial, (list, tuple)) or len(trial) != len(SEEDS):
+    if not isinstance(trial, (list, tuple)) or len(trial) != len(expected_seeds):
         raise RuntimeError(
-            f"expected one Max-Test-F1 outcome for each of seeds {SEEDS}; observed {trial!r}"
+            f"expected one Max-Test-F1 outcome for each of seeds {expected_seeds}; observed {trial!r}"
         )
     values = []
     for item in trial:
@@ -393,7 +655,7 @@ def _checkpoint_max_test_metrics(
             key, separator, value = line.partition(":")
             if separator and key.strip() in {
                 "model", "seed", "pretrained_bert", "num_epoch",
-                "metrics_of_this_checkpoint", "max_test_metrics",
+                "log_step", "metrics_of_this_checkpoint", "max_test_metrics",
             }:
                 fields[key.strip()] = value.strip()
         try:
@@ -401,6 +663,7 @@ def _checkpoint_max_test_metrics(
             model_id = fields["pretrained_bert"].strip()
             model_name = fields["model"]
             epoch_count = int(ast.literal_eval(fields["num_epoch"]))
+            checkpoint_log_step = int(ast.literal_eval(fields["log_step"]))
             checkpoint_metrics = ast.literal_eval(fields["metrics_of_this_checkpoint"])
             max_test_metrics = ast.literal_eval(fields["max_test_metrics"])
             raw_score = float(max_test_metrics["max_apc_test_f1"])
@@ -431,6 +694,7 @@ def _checkpoint_max_test_metrics(
                 "seed": seed,
                 "max_test_f1_fraction": raw_score,
                 "max_test_f1_pct": score_pct,
+                "log_step": checkpoint_log_step,
                 "checkpoint_directory": args_path.parent.relative_to(run_dir).as_posix(),
                 "artifact_sha256": {
                     args_path.relative_to(run_dir).as_posix(): _sha256(args_path),
@@ -517,7 +781,11 @@ def recover_failed_reference_run(run_dir: Path) -> dict[str, Any]:
 
 
 def _resolved_config(
-    namespace: dict[str, Any], expected: dict[str, Any], log_path: Path, run_dir: Path
+    namespace: dict[str, Any],
+    expected: dict[str, Any],
+    log_path: Path,
+    run_dir: Path,
+    expected_seeds: list[int] | None = None,
 ) -> dict[str, Any]:
     config = namespace.get("config")
     trainer = namespace.get("trainer")
@@ -548,7 +816,7 @@ def _resolved_config(
         observed = actual.get(key)
         if key == "log_step" and expected_value == -1 and isinstance(observed, int) and observed > 0:
             log_step_resolution = _resolve_log_step_sentinel(
-                trainer, expected, observed, log_path, run_dir
+                trainer, expected, observed, log_path, run_dir, expected_seeds
             )
             continue
         if isinstance(expected_value, float) and observed is not None:
@@ -564,13 +832,40 @@ def _resolved_config(
     return actual
 
 
-def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) -> dict[str, Any]:
+def run_reference_baseline(
+    encoder: str,
+    run_dir: Path,
+    reference_repo: Path,
+    *,
+    seed: int | None = None,
+    protocol_id: str = PROTOCOL_ID,
+) -> dict[str, Any]:
     matrix = json.loads(MATRIX_PATH.read_text(encoding="utf-8"))
     scripts = _expected_scripts(matrix)
     if encoder not in scripts:
         raise ValueError(f"unknown encoder {encoder!r}")
-    if run_dir.exists() and any(path.name != "training.log" for path in run_dir.iterdir()):
-        raise FileExistsError(f"refusing to overwrite non-empty run directory: {run_dir}")
+    if protocol_id not in {PROTOCOL_ID, CACHE_PROCESS_PROTOCOL_ID}:
+        raise ValueError(f"unknown source-script protocol {protocol_id!r}")
+    if protocol_id == CACHE_PROCESS_PROTOCOL_ID and (seed not in SEEDS):
+        raise ValueError(f"isolated source-script run needs one declared seed from {SEEDS!r}")
+    if protocol_id == PROTOCOL_ID and seed is not None:
+        raise ValueError("single-seed execution requires the cache-process protocol")
+    execution_seeds = SEEDS if seed is None else [int(seed)]
+    preloaded_cache_hashes: dict[str, str] = {}
+    if run_dir.exists():
+        preloaded_caches = {
+            path.name: _sha256(path)
+            for path in run_dir.glob("*.dataset.*.cache")
+            if path.is_file()
+        }
+        preloaded_cache_hashes = preloaded_caches
+        unexpected = [
+            path.name
+            for path in run_dir.iterdir()
+            if path.name != "training.log" and path.name not in preloaded_caches
+        ]
+        if unexpected:
+            raise FileExistsError(f"refusing to overwrite non-empty run directory: {run_dir}")
     run_dir.mkdir(parents=True, exist_ok=True)
     manifest_path = run_dir / "manifest.json"
     spec = scripts[encoder]
@@ -596,14 +891,19 @@ def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) ->
         "status": "running",
         "created_at": _now(),
         "runner_pid": os.getpid(),
-        "experiment_protocol_id": PROTOCOL_ID,
+        "experiment_protocol_id": protocol_id,
+        "execution": {
+            "mode": "fresh_process_per_declared_seed" if seed is not None else "single_source_process_all_declared_seeds",
+            "selected_seed": seed,
+            "declared_source_seeds": list(SEEDS),
+        },
         "purpose": "reference_baseline_reproduction",
         "dataset": "hoasa",
         "train_dataset": "hoasa",
         "test_dataset": "hoasa",
         "architecture": "emcgcn",
         "encoder": encoder,
-        "seeds": SEEDS,
+        "seeds": execution_seeds,
         "code": {
             "revision": _git_value(ROOT, "rev-parse", "HEAD"),
             "dirty": bool(workspace_status),
@@ -616,7 +916,11 @@ def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) ->
             "checkpoint_selection": "best test-scoring checkpoint during training; legacy test-selected, test-leaked source-script metric",
             "test_selected_checkpoint": True,
             "clean_heldout_estimate": False,
-            "invocation": "runpy.run_path(source_script, run_name='__main__') with source training statements unchanged",
+            "invocation": (
+                "runpy.run_path(source_script, run_name='__main__') with the PyABSA Trainer._run loop limited by runtime wrapper to the selected declared seed"
+                if seed is not None
+                else "runpy.run_path(source_script, run_name='__main__') with source training statements unchanged"
+            ),
             "repository": str(reference_repo.resolve()),
             "repository_revision": reference_revision,
             "repository_status_available": reference_status is not None,
@@ -630,6 +934,7 @@ def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) ->
             "script_path": str(source_path),
             "script_sha256": None,
             "dataset_directory": str(run_data_dir.resolve()),
+            "run_dataset_copy_directory": str(run_data_dir.resolve()),
             "source_script_copy": "provenance/source_script.py",
             "source_script_sha256": None,
             "runner_log": "training.log",
@@ -732,6 +1037,11 @@ def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) ->
         # installed cache-loader source plus every correction in the manifest.
         runtime_seed_cache, restore_runtime_method = _install_seed_cache_compatibility(run_dir)
         initial["reference"]["runtime_seed_cache_compatibility"] = runtime_seed_cache
+        single_seed_runtime = None
+        restore_single_seed_runtime = None
+        if seed is not None:
+            single_seed_runtime, restore_single_seed_runtime = _install_single_seed_training(run_dir, seed)
+            initial["reference"]["runtime_single_seed_execution"] = single_seed_runtime
         _atomic_json(manifest_path, initial)
 
         # The source uses PyABSA's date-based logger directory. A stable label
@@ -744,14 +1054,60 @@ def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) ->
         finally:
             initial["reference"]["runtime_seed_cache_compatibility"] = runtime_seed_cache
             restore_runtime_method()
-        actual_config = _resolved_config(namespace, spec, run_dir / "training.log", run_dir)
+            if restore_single_seed_runtime is not None:
+                restore_single_seed_runtime()
+        actual_config = _resolved_config(
+            namespace, spec, run_dir / "training.log", run_dir, execution_seeds
+        )
+        if single_seed_runtime is not None:
+            single_seed_runtime["events"] = list(single_seed_runtime.get("events", []))
+        cache_loads = re.findall(
+            r"Load cache dataset from ([^\r\n]+\.cache)",
+            (run_dir / "training.log").read_text(encoding="utf-8", errors="replace"),
+        )
+        cache_saves = re.findall(
+            r"Save cache dataset to ([^\r\n]+\.cache)",
+            (run_dir / "training.log").read_text(encoding="utf-8", errors="replace"),
+        )
+        dataset_cache_files = sorted(
+            {
+                path.name: _sha256(path)
+                for path in run_dir.glob("*.dataset.*.cache")
+                if path.is_file()
+            }.items()
+        )
+        initial["reference"]["dataset_cache_evidence"] = {
+            "cache_key_excludes_seed": True,
+            "cache_load_events": cache_loads,
+            "cache_save_events": cache_saves,
+            "cache_file_sha256": dict(dataset_cache_files),
+            "preloaded_cache_files": preloaded_cache_hashes if seed is not None else {},
+            "cache_hit_required": bool(
+                seed is not None
+                and preloaded_cache_hashes
+                and not spec["settings"].get("overwrite_cache", False)
+            ),
+        }
+        for cache_name, expected_hash in preloaded_cache_hashes.items():
+            cache_path = run_dir / cache_name
+            if not cache_path.is_file() or _sha256(cache_path) != expected_hash:
+                raise RuntimeError(f"preloaded dataset cache changed during source execution: {cache_name}")
+        if initial["reference"]["dataset_cache_evidence"]["cache_hit_required"]:
+            loaded_names = {Path(value.strip()).name for value in cache_loads}
+            preloaded_names = set(
+                initial["reference"]["dataset_cache_evidence"]["preloaded_cache_files"]
+            )
+            if not preloaded_names or not (loaded_names & preloaded_names):
+                raise RuntimeError(
+                    "isolated seed process did not load a predeclared cache file shared from seed 1"
+                )
         metric_visualizer = namespace.get("mv")
         try:
-            values = _get_score_series(metric_visualizer)
+            values = _get_score_series(metric_visualizer, execution_seeds)
         except RuntimeError as metric_visualizer_error:
             checkpoint_metrics = _checkpoint_max_test_metrics(
                 run_dir,
-                SEEDS,
+                execution_seeds,
                 spec["model_id"],
             )
             values = [item["max_test_f1_pct"] for item in checkpoint_metrics]
@@ -763,7 +1119,7 @@ def run_reference_baseline(encoder: str, run_dir: Path, reference_repo: Path) ->
             }
         seed_metrics = [
             {"seed": seed, "max_test_f1_pct": score}
-            for seed, score in zip(SEEDS, values)
+            for seed, score in zip(execution_seeds, values)
         ]
         metrics = {
             "metric": "PyABSA MetricVisualizer Max-Test-F1",
@@ -813,9 +1169,17 @@ def main() -> int:
     parser.add_argument("--encoder", required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--reference-repo", type=Path, required=True)
+    parser.add_argument("--seed", type=int)
+    parser.add_argument("--protocol-id", default=PROTOCOL_ID)
     args = parser.parse_args()
     try:
-        result = run_reference_baseline(args.encoder, args.run_dir.resolve(), args.reference_repo.resolve())
+        run_reference_baseline(
+            args.encoder,
+            args.run_dir.resolve(),
+            args.reference_repo.resolve(),
+            seed=args.seed,
+            protocol_id=args.protocol_id,
+        )
     except KeyboardInterrupt:
         print("reference source run interrupted; partial evidence preserved", file=sys.stderr, flush=True)
         return 130

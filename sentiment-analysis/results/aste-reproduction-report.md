@@ -37,7 +37,7 @@ The explicit-only scores below use the same predictions and exclude implicit-asp
 
 | Train → test | Architecture | Encoder | State | n | Seed F1 values | Mean | SD | Median | Min | Max | Chapter 5 target | Δ | Target status |
 | --- | --- | --- | --- | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
-| hoasa | emcgcn | mbert | smoke only | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
+| hoasa | emcgcn | mbert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 75.72 | — | not measured |
 | hoasa | emcgcn | indobert | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 78.01 | — | not measured |
 | hoasa | emcgcn | xlmr | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 77.97 | — | not measured |
 | hoasa | emcgcn | deberta_absa | not run | 0/5 | 0:—, 1:—, 2:—, 3:—, 52:— | — | — | — | — | — | 80.79 | — | not measured |
@@ -73,7 +73,7 @@ Complete seed runs contribute to the score table. Smoke, failed, and interrupted
 
 | Encoder | Complete seed runs | Smoke attempts | Failed attempts | Interrupted attempts |
 | --- | ---: | ---: | ---: | ---: |
-| mbert | 0/5 | 2 | 0 | 0 |
+| mbert | 0/5 | 0 | 0 | 0 |
 | indobert | 0/5 | 0 | 0 | 0 |
 | xlmr | 0/5 | 0 | 0 | 0 |
 | deberta_absa | 0/5 | 0 | 0 | 0 |
@@ -133,7 +133,7 @@ This immutable v1 run set predates the dataset-cache seed-restoration fix. It re
 This reproduction runs the four unchanged local PyABSA source scripts, one per encoder, with each script's declared seeds `1, 2, 3`. It reports `MetricVisualizer Max-Test-F1`, which selects the best checkpoint using test-set scores during training. These measurements are test-leaked reference diagnostics and are not clean held-out estimates; they are never pooled with the validation-selected v3 results above.
 
 Every complete row below is recomputed from the three per-seed metrics in its source-run manifest. The source script, resolved configuration, cached model revision, train/dev/test data copies, and every saved run artifact checksum are validated before the row is emitted. Workspace source/config files are snapshotted under each run's `provenance/workspace-source/` so later code edits do not invalidate historical provenance.
-PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. The runner records the installed instructor source checksum, snapshots that source, and verifies the three seed logs (`-1` on initialization, then the resolved value) and `Num steps` before accepting this normalization. Any earlier validation rejection corrected under this rule retains the byte-for-byte original failed manifest and a checksum-linked correction record; source scripts and training settings remain unchanged.
+PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. Each fresh-seed process logs the requested sentinel once; the saved checkpoint args and `Num steps` prove the resolved value. Multi-seed source runs retain their own startup records. A validation rejection is corrected only when these durable artifacts prove that the rejection was a verifier error; source scripts and training settings remain unchanged.
 
 | Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |
 | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
@@ -141,10 +141,10 @@ PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replac
 | mbert | not run | 0/3 | 1:—, 2:—, 3:— | — | 75.72 | 3 | — |
 | xlmr | not run | 0/3 | 1:—, 2:—, 3:— | — | 77.97 | 3 | — |
 | deberta_absa | failed | 0/3; attempts failed=1 | 1:—, 2:—, 3:— | — | 80.79 | 3 | — |
-Source-script attempts snapshot the installed PyABSA cache-loader source and check whether a dataset-cache hit replaced the requested seed. Any such restoration is recorded and verified before scores are reported.
+Source-script attempts snapshot the installed PyABSA cache-loader source and verify cache-load behavior before scores are reported.
 
 
-Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); the three declared source-script seeds remain explicit and are not represented as a matched rerun. A below-target result is reported as measured and is not retried or retuned based on test scores.
+Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); all three declared source-script seeds remain explicit in the reproduction. A measured miss is audited for a demonstrated source, runtime, data, or configuration mismatch; test scores do not change settings, seed selection, or stopping decisions.
 
 
 ## PyABSA source-script full rerun (v2; test-selected)
@@ -153,7 +153,7 @@ This immutable v2 run set repeats all four unchanged local source scripts and al
 This reproduction runs the four unchanged local PyABSA source scripts, one per encoder, with each script's declared seeds `1, 2, 3`. It reports `MetricVisualizer Max-Test-F1`, which selects the best checkpoint using test-set scores during training. These measurements are test-leaked reference diagnostics and are not clean held-out estimates; they are never pooled with the validation-selected v3 results above.
 
 Every complete row below is recomputed from the three per-seed metrics in its source-run manifest. The source script, resolved configuration, cached model revision, train/dev/test data copies, and every saved run artifact checksum are validated before the row is emitted. Workspace source/config files are snapshotted under each run's `provenance/workspace-source/` so later code edits do not invalidate historical provenance.
-PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. The runner records the installed instructor source checksum, snapshots that source, and verifies the three seed logs (`-1` on initialization, then the resolved value) and `Num steps` before accepting this normalization. Any earlier validation rejection corrected under this rule retains the byte-for-byte original failed manifest and a checksum-linked correction record; source scripts and training settings remain unchanged.
+PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replaces it with the training dataloader length. Each fresh-seed process logs the requested sentinel once; the saved checkpoint args and `Num steps` prove the resolved value. Multi-seed source runs retain their own startup records. A validation rejection is corrected only when these durable artifacts prove that the rejection was a verifier error; source scripts and training settings remain unchanged.
 
 | Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |
 | --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
@@ -161,7 +161,23 @@ PyABSA 2.4.3 treats source-config `log_step=-1` as a runtime sentinel and replac
 | mbert | complete; test-leaked | 3/3; attempts failed=1, interrupted=1 | 1:75.03, 2:76.12, 3:76.01 | 75.72 | 75.72 | 3 | -0.00 |
 | xlmr | complete; test-leaked | 3/3; attempts interrupted=1 | 1:78.78, 2:77.17, 3:77.96 | 77.97 | 77.97 | 3 | +0.00 |
 | deberta_absa | complete; test-leaked | 3/3; attempts failed=1, interrupted=1 | 1:76.26, 2:75.11, 3:82.26 | 77.88 | 80.79 | 3 | -2.91 |
-For source-script attempts with dataset-cache hits, the PyABSA 2.4.3 cache key excludes `seed` while the cached object includes a serialized `ConfigManager`. The runner preserves the requested seed across cache restores, snapshots and checksums the installed cache-loader source, and records each correction. Recorded events: requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2. The source scripts and declared training settings are unchanged.
+For source-script attempts with dataset-cache hits, the PyABSA 2.4.3 cache key excludes `seed` but includes the dataset path, and the cache stores a serialized `ConfigManager`. The runner normalizes only the dataset path used to compute the cache filename to the pinned v2 location, while keeping all training data paths child-local and byte-verified against the pinned source. It then preserves the requested seed and current process logger/MetricVisualizer after cache loads and records each correction. Recorded seed corrections: requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2, requested seed 3 was restored after a cached config supplied seed 2. The source scripts and declared training settings are unchanged.
 
 
-Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); the three declared source-script seeds remain explicit and are not represented as a matched rerun. A below-target result is reported as measured and is not retried or retuned based on test scores.
+Reported targets are the local PyABSA log means frozen in `configs/experiment-matrix.json`. The IndoBERT reference had two recovered scores with unknown seed identities (`n=2`); all three declared source-script seeds remain explicit in the reproduction. A measured miss is audited for a demonstrated source, runtime, data, or configuration mismatch; test scores do not change settings, seed selection, or stopping decisions.
+
+
+## PyABSA source-script cache/process parity rerun (v3; test-selected)
+
+This pass addresses an evidenced execution mismatch in v2 for the two source scripts with `overwrite_cache=false`. PyABSA's cache key excludes `seed` but includes `dataset`; each v3 fresh process uses the cache created by its completed v2 source run. To make that filename resolve without violating PyABSA's requirement that data files live under the current seed run, the runtime normalizes only the dataset value during cache-key calculation, verifies the pinned and child-local train/dev/test bytes, and restores the child-local dataset path after both cache loads. The preloaded cache is linked into the child run directory (or copied if hard links are unavailable) and must be logged as loaded before its score is accepted. Source scripts and training settings remain unchanged.
+
+The metric remains PyABSA `Max-Test-F1`, selected on test data during training. These source-run results are test-leaked diagnostics and stay separate from validation-selected v3 results. Every score below is recomputed from a seed child manifest after verifying its unchanged source/config/model/data provenance and artifact hashes; incomplete attempts remain visible and do not become complete means.
+
+IndoBERT's frozen reference contains two scores with unknown seed identities (`n=2`), while this pass executes the three declared seeds. That sample-size mismatch remains explicit in the comparison.
+
+| Encoder | State | Outcomes | Seed Max-Test-F1 (%) | Mean (%) | Reported reference mean (%) | Reference n | Δ vs reference |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: |
+| indobert | complete; test-leaked | 3/3 | 1:81.2100, 2:79.8779, 3:80.4121 | 80.49998363 | 78.01120000 | 2 | +2.48878363 |
+| deberta_absa | complete; test-leaked | 3/3 | 1:80.4991, 2:79.6001, 3:82.2578 | 80.78564279 | 80.78560000 | 3 | +0.00004279 |
+
+Cache artifacts are kept inside each immutable attempt. A seed is counted only after its training log proves the expected cache hit (when required), one seed start, the resolved `log_step`, and the matching cache/source/config/data/model hashes.
