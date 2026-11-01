@@ -20,6 +20,7 @@ dependencies = [
 
 [project.scripts]
 aste-audit = "aste_repro.audit:main"
+aste-annotate = "aste_repro.llm_annotation:main"
 aste-hoasa-view = "aste_repro.hoasa:main"
 aste-report = "aste_repro.report:main"
 aste-run = "aste_repro.training:main"
