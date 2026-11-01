@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "audit_date": "2026-09-29",
+  "dataset": "HoASA",
+  "tokenizer": "Transformers AutoTokenizer from each pinned encoder snapshot; full input with special tokens, truncation disabled",
+  "minimum_from_thesis": 128,
+  "resolved_policy": "Use the smallest multiple of 8 at or above the longest full train/dev sequence; never derive training capacity from test metrics or labels.",
+  "source_hashes": {
+    "train": "33714cfdafa40a5c581cb744845268aeea18450265af67ec572623afa7c20b6d",
+    "dev": "a00d16dcb0bcbc6cde1c9650323145c5d22be33620eff7c812fafe36ec06c690",
+    "test_label_free_length_diagnostic": "3f3883f8c25706d79b1c6bbce253bb548b38c4eb4a786f4b14506d3a28a749a0"
+  },
+  "encoders": {
+    "mbert": {
+      "revision": "7cbf9a625e29989f6b9c6c2fa68234c304f7e38f",
+      "train": {"max_full_sequence_tokens": 141, "row_id": 2455, "rows_over_128": 3},
+      "dev": {"max_full_sequence_tokens": 166, "row_id": 69, "rows_over_128": 2},
+      "test_label_free_diagnostic": {"max_full_sequence_tokens": 108, "row_id": 190},
+      "resolved_max_seq_len": 168
+    },
+    "indobert": {
+      "revision": "c2cd0b51ddce6580eb35263b39b0a1e5fb0a39e2",
+      "train": {"max_full_sequence_tokens": 106, "row_id": 1285, "rows_over_128": 0},
+      "dev": {"max_full_sequence_tokens": 125, "row_id": 69, "rows_over_128": 0},
+      "test_label_free_diagnostic": {"max_full_sequence_tokens": 81, "row_id": 408},
+      "resolved_max_seq_len": 128
+    },
+    "xlmr": {
+      "revision": "e73636d4f797dec63c3081bb6ed5c7b0bb3f2089",
+      "train": {"max_full_sequence_tokens": 132, "row_id": 1285, "rows_over_128": 2},
+      "dev": {"max_full_sequence_tokens": 153, "row_id": 69, "rows_over_128": 1},
+      "test_label_free_diagnostic": {"max_full_sequence_tokens": 104, "row_id": 408},
+      "resolved_max_seq_len": 160
+    },
+    "deberta_absa": {
+      "revision": "10c9dff335a44073e1352360c3a7bc54dc58eb01",
+      "train": {"max_full_sequence_tokens": 176, "row_id": 1285, "rows_over_128": 5},
+      "dev": {"max_full_sequence_tokens": 201, "row_id": 69, "rows_over_128": 4},
+      "test_label_free_diagnostic": {"max_full_sequence_tokens": 124, "row_id": 408},
+      "resolved_max_seq_len": 208
+    }
+  },
+  "runtime_note": "The compatibility runtime pins protobuf 3.20.3 because Transformers 4.29.2's DeBERTa-v2 SentencePiece tokenizer bindings fail with protobuf 7.36.2.",
+  "evidence_boundary": "Length counts are preprocessing diagnostics only. No test labels or model metrics were used. They do not constitute model-quality evidence."
+}
